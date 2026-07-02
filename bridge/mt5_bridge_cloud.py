@@ -22,9 +22,9 @@ import MetaTrader5 as mt5
 import websockets
 
 # ── Config ───────────────────────────────────────────
-RELAY_URL   = "wss://your-app.railway.app"   # ← paste your Railway/Render URL
-API_SECRET  = "xauusd-secret-change-me"       # ← must match relay_server.py
-SYMBOLS     = ["XAUUSD","EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD"]
+RELAY_URL   = "wss://xauusd-terminal-production.up.railway.app"   # ← paste your Railway/Render URL
+API_SECRET  = "xauusd-secret-2026"       # ← must match relay_server.py
+SYMBOLS     = ["XAUUSDm","EURUSDm","GBPUSDm","USDJPYm","USDCHFm","AUDUSDm","USDCADm"]
 TICK_INTERVAL = 0.1
 # ─────────────────────────────────────────────────────
 
