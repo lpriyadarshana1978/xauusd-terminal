@@ -18,12 +18,13 @@ CONFIG:
 import asyncio
 import json
 import time
+import ssl
 import MetaTrader5 as mt5
 import websockets
 
 # ── Config ───────────────────────────────────────────
-RELAY_URL   = "wss://xauusd-terminal-production.up.railway.app"   # ← paste your Railway/Render URL
-API_SECRET  = "xauusd-secret-2026"       # ← must match relay_server.py
+RELAY_URL   = "wss://xauusd-terminal-production.up.railway.app"
+API_SECRET  = "xauusd-secret-2026"
 SYMBOLS     = ["XAUUSDm","EURUSDm","GBPUSDm","USDJPYm","USDCHFm","AUDUSDm","USDCADm"]
 TICK_INTERVAL = 0.1
 # ─────────────────────────────────────────────────────
@@ -72,9 +73,14 @@ async def run():
     print(f"[RELAY] Connecting to {RELAY_URL} ...")
     last_ticks = {}
 
+    # SSL context that skips certificate verification
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
     while True:
         try:
-            async with websockets.connect(RELAY_URL) as ws:
+            async with websockets.connect(RELAY_URL, ssl=ssl_ctx) as ws:
                 # Identify as feeder
                 await ws.send(json.dumps({"role": "feeder", "secret": API_SECRET}))
                 print(f"[RELAY] Connected as feeder.")
@@ -104,7 +110,7 @@ async def run():
                         try:
                             msg = json.loads(raw)
                             if msg.get("type") == "subscribe":
-                                sym = msg.get("symbol","XAUUSD")
+                                sym = msg.get("symbol","XAUUSDm")
                                 tf  = msg.get("tf","15m")
                                 rates = get_rates(sym, tf, 100)
                                 await ws.send(json.dumps({"type":"history","symbol":sym,"tf":tf,"bars":rates}))
