@@ -1,24 +1,12 @@
 """
 Cloud WebSocket Relay Server
 ============================
-Deploy this to Railway or Render (free tier).
+Deploy this to Railway or Render.
 Your local MT5 bridge connects TO this server,
 and your GitHub Pages chart connects FROM this server.
 
 Architecture:
-  MT5 (your PC) → mt5_bridge.py → [this relay] ← chart (GitHub Pages)
-
-DEPLOY TO RAILWAY:
-  1. Create account at railway.app
-  2. New Project → Deploy from GitHub repo
-  3. Point to this file as the start command:
-     python relay_server.py
-
-DEPLOY TO RENDER:
-  1. Create account at render.com
-  2. New Web Service → connect GitHub repo
-  3. Start command: python relay_server.py
-  4. Free tier is fine.
+  MT5 (your PC) -> mt5_bridge_cloud.py -> [this relay] <- chart (GitHub Pages)
 
 INSTALL:
   pip install websockets
@@ -28,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+from http import HTTPStatus
 import websockets
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
@@ -49,6 +38,12 @@ async def broadcast_to_charts(message: str):
         except websockets.ConnectionClosed:
             dead.add(ws)
     chart_clients -= dead
+
+async def health_check(path, request_headers):
+    """Handle HTTP health checks from Railway"""
+    if path == "/health" or path == "/":
+        return HTTPStatus.OK, [], b"OK\n"
+    return None
 
 async def handle_connection(websocket, path=None):
     # First message determines role
@@ -107,7 +102,14 @@ async def main():
     log.info(f"API_SECRET: {API_SECRET[:8]}...")
     log.info("Waiting for MT5 bridge and chart connections...")
 
-    async with websockets.serve(handle_connection, "0.0.0.0", PORT):
+    async with websockets.serve(
+        handle_connection,
+        "0.0.0.0",
+        PORT,
+        process_request=health_check,
+        ping_interval=20,
+        ping_timeout=10,
+    ):
         await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
