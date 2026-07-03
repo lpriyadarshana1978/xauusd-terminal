@@ -14,6 +14,7 @@ chart_clients = set()
 feeder_clients = set()
 
 async def broadcast_to_charts(message):
+    global chart_clients
     dead = set()
     for ws in chart_clients:
         try:
