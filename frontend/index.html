@@ -63,7 +63,6 @@ body{display:flex;flex-direction:column;font-family:'Courier New',monospace;font
   <button class="indbtn" id="b-crt" onclick="tog('crt')" style="border-color:#ff9900;color:#ff9900;">CRT</button>
   <button class="indbtn" id="b-wyc" onclick="tog('wyc')" style="border-color:#00ccff;color:#00ccff;">WYC</button>
   <button class="indbtn" id="b-ew" onclick="tog('ew')" style="border-color:#ff44ff;color:#ff44ff;">EW</button>
-  <button class="indbtn on" id="b-domliq" onclick="tog('domliq')" style="border-color:#00ffcc;color:#00ffcc;" title="Live DOM Liquidity Heatmap">DOM-LIQ</button>
   <div style="display:flex;gap:2px;margin-left:4px;">
     <button class="tfb" onclick="zoomIn()">+</button>
     <button class="tfb" onclick="zoomOut()">−</button>
@@ -206,142 +205,10 @@ let candles={},cvdHist={},domData=[],whaleAlerts=[];
 let cvd=0,vwapV=0,tick=0,openPrice=0;
 let currentSym='XAUUSDm',currentTF='15m';
 let mtfData={},mtfMode='bias';
-let inds={vwap:true,fp:true,fvg:true,liq:true,smc:true,whale:true,poc:true,bubble:true,crt:false,wyc:false,ew:false,domliq:true};
+let inds={vwap:true,fp:true,fvg:true,liq:true,smc:true,whale:true,poc:true,bubble:true,crt:false,wyc:false,ew:false};
 let ws=null,wsLive=false,demoMode=false;
 let viewBars=6,viewOffset=0,yOffset=0,bubbleTick=0; // yOffset shifts price range up/down
 const MIN_BARS=2,MAX_BARS=120;
-
-// ── DOM Liquidity Heatmap Data ───────────────────────
-let domLiqHistory=[]; // array of {time, levels:[{price, bidVol, askVol}]}
-const DOM_LIQ_MAX_SNAPSHOTS=120;
-let domLiqLast=0;
-
-function updateDomLiq(price){
-  const now=Date.now();
-  if(now-domLiqLast<500)return; // snapshot every 500ms
-  domLiqLast=now;
-  const step=0.10; // price step for levels
-  const levels=[];
-  for(let i=-40;i<=40;i++){
-    const p=Math.round((price+i*step)*100)/100;
-    const dist=Math.abs(i);
-    if(i<0){
-      // Bid side - liquidity below price
-      const base=Math.max(50,800-dist*18+Math.random()*200);
-      // Add clusters at round numbers
-      const isRound=(p%1<0.05||p%1>0.95);
-      const isHalf=(Math.abs(p%1-0.5)<0.05);
-      const cluster=isRound?base*2.5:isHalf?base*1.6:base;
-      levels.push({price:p,bidVol:Math.floor(cluster),askVol:0});
-    } else if(i>0){
-      // Ask side - liquidity above price
-      const base=Math.max(50,800-dist*18+Math.random()*200);
-      const isRound=(p%1<0.05||p%1>0.95);
-      const isHalf=(Math.abs(p%1-0.5)<0.05);
-      const cluster=isRound?base*2.5:isHalf?base*1.6:base;
-      levels.push({price:p,bidVol:0,askVol:Math.floor(cluster)});
-    } else {
-      levels.push({price:p,bidVol:Math.floor(200+Math.random()*100),askVol:Math.floor(200+Math.random()*100)});
-    }
-  }
-  domLiqHistory.push({time:Math.floor(now/1000),levels});
-  if(domLiqHistory.length>DOM_LIQ_MAX_SNAPSHOTS)domLiqHistory.shift();
-}
-
-function drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP){
-  if(!domLiqHistory.length)return;
-  // Use latest snapshot for all visible candles (real-time heatmap)
-  const snap=domLiqHistory[domLiqHistory.length-1];
-  if(!snap||!snap.levels.length)return;
-  const maxVol=Math.max(...snap.levels.map(l=>Math.max(l.bidVol,l.askVol)));
-  if(maxVol<=0)return;
-
-  // Draw heatmap bands across the full chart width
-  snap.levels.forEach(lv=>{
-    if(lv.price<minP||lv.price>maxP)return;
-    const y=py(lv.price);
-    const bandH=Math.max(2,Math.abs(py(lv.price)-py(lv.price+0.10)));
-    if(lv.bidVol>0){
-      const intensity=Math.min(1,lv.bidVol/maxVol);
-      const alpha=0.06+intensity*0.35;
-      // Green/cyan gradient for bids
-      const r=0,g=Math.floor(100+intensity*155),b2=Math.floor(80+intensity*100);
-      ctx.fillStyle=`rgba(${r},${g},${b2},${alpha})`;
-      ctx.fillRect(P.l,y-bandH/2,pw,bandH);
-      // Bright edge for large levels
-      if(intensity>0.6){
-        ctx.fillStyle=`rgba(0,255,200,${intensity*0.15})`;
-        ctx.fillRect(P.l,y-1,pw,2);
-      }
-    }
-    if(lv.askVol>0){
-      const intensity=Math.min(1,lv.askVol/maxVol);
-      const alpha=0.06+intensity*0.35;
-      // Red/magenta gradient for asks
-      const r2=Math.floor(150+intensity*105),g=Math.floor(20+intensity*30),b2=Math.floor(40+intensity*60);
-      ctx.fillStyle=`rgba(${r2},${g},${b2},${alpha})`;
-      ctx.fillRect(P.l,y-bandH/2,pw,bandH);
-      if(intensity>0.6){
-        ctx.fillStyle=`rgba(255,50,80,${intensity*0.15})`;
-        ctx.fillRect(P.l,y-1,pw,2);
-      }
-    }
-  });
-
-  // Label
-  ctx.fillStyle='#00ffcc88';ctx.font='bold 9px monospace';ctx.textAlign='right';
-  ctx.fillText('Live DOM Liquidity',P.l+pw-4,P.t+12);
-
-  // Liquidity totals at bottom
-  let totalBid=0,totalAsk=0;
-  snap.levels.forEach(l=>{totalBid+=l.bidVol;totalAsk+=l.askVol;});
-  const bidK=(totalBid/1000).toFixed(1),askK=(totalAsk/1000).toFixed(1);
-  ctx.fillStyle='#00e67688';ctx.textAlign='left';
-  ctx.fillText('LIQ: '+bidK+'K',P.l+4,ph+P.t-4);
-  ctx.fillStyle='#f4433688';ctx.textAlign='right';
-  ctx.fillText('LIQ: '+askK+'K',P.l+pw-4,ph+P.t-4);
-
-  // Near DOM Power (top-right area)
-  const nearBid=snap.levels.filter(l=>l.bidVol>0).slice(-5).reduce((s,l)=>s+l.bidVol,0);
-  const nearAsk=snap.levels.filter(l=>l.askVol>0).slice(0,5).reduce((s,l)=>s+l.askVol,0);
-  const nearTotal=nearBid+nearAsk||1;
-  const bidPct=Math.round(nearBid/nearTotal*100),askPct=100-bidPct;
-  const boxX=P.l+pw-180,boxY=P.t+18;
-  // Near DOM Power box
-  ctx.fillStyle='#00000066';ctx.fillRect(boxX,boxY,176,32);
-  ctx.strokeStyle='#ffffff15';ctx.lineWidth=1;ctx.strokeRect(boxX,boxY,176,32);
-  ctx.fillStyle='#ffffff55';ctx.font='bold 7px monospace';ctx.textAlign='center';
-  ctx.fillText('NEAR DOM POWER \u00B10.5%',boxX+88,boxY+8);
-  // Power bar
-  const barX=boxX+4,barY=boxY+12,barW=168,barH=8;
-  const bidW=Math.floor(barW*bidPct/100);
-  ctx.fillStyle='#00e676';ctx.fillRect(barX,barY,bidW,barH);
-  ctx.fillStyle='#f44336';ctx.fillRect(barX+bidW,barY,barW-bidW,barH);
-  // Percentages
-  ctx.font='bold 8px monospace';
-  ctx.fillStyle='#00e676';ctx.textAlign='left';ctx.fillText((nearBid/1000).toFixed(1)+'K',barX,barY+barH+10);
-  ctx.fillStyle='#00e676';ctx.textAlign='center';ctx.fillText(bidPct+'%',barX+bidW/2,barY+barH+10);
-  ctx.fillStyle='#f44336';ctx.textAlign='center';ctx.fillText(askPct+'%',barX+bidW+(barW-bidW)/2,barY+barH+10);
-  ctx.fillStyle='#f44336';ctx.textAlign='right';ctx.fillText((nearAsk/1000).toFixed(1)+'K',barX+barW,barY+barH+10);
-
-  // Aggressive Power box
-  const apY=boxY+36;
-  ctx.fillStyle='#00000066';ctx.fillRect(boxX,apY,176,32);
-  ctx.strokeStyle='#ffffff15';ctx.lineWidth=1;ctx.strokeRect(boxX,apY,176,32);
-  ctx.fillStyle='#ffffff55';ctx.font='bold 7px monospace';ctx.textAlign='center';
-  ctx.fillText('AGGRESSIVE POWER',boxX+88,apY+8);
-  const agBid=totalBid,agAsk=totalAsk,agTotal=agBid+agAsk||1;
-  const agBidPct=Math.round(agBid/agTotal*100),agAskPct=100-agBidPct;
-  const abY=apY+12;
-  const agBidW=Math.floor(barW*agBidPct/100);
-  ctx.fillStyle='#00e676';ctx.fillRect(barX,abY,agBidW,barH);
-  ctx.fillStyle='#f44336';ctx.fillRect(barX+agBidW,abY,barW-agBidW,barH);
-  ctx.font='bold 8px monospace';
-  ctx.fillStyle='#00e676';ctx.textAlign='left';ctx.fillText((agBid/1000).toFixed(1)+'K',barX,abY+barH+10);
-  ctx.fillStyle='#00e676';ctx.textAlign='center';ctx.fillText(agBidPct+'%',barX+agBidW/2,abY+barH+10);
-  ctx.fillStyle='#f44336';ctx.textAlign='center';ctx.fillText(agAskPct+'%',barX+agBidW+(barW-agBidW)/2,abY+barH+10);
-  ctx.fillStyle='#f44336';ctx.textAlign='right';ctx.fillText((agAsk/1000).toFixed(1)+'K',barX+barW,abY+barH+10);
-}
 
 // ── Demo data ─────────────────────────────────────────
 function demoCandle(prev){
@@ -417,7 +284,6 @@ function handleMsg(msg){
     $('pc').className='pchg '+(chg>=0?'pos':'neg');
     set('sv-spread',msg.spread,'#aaa');
     genDOMDemo(p);
-    if(inds.domliq)updateDomLiq(p);
     const cs=candles[currentTF];
     if(cs?.length){const last=cs[cs.length-1];last.close=p;last.high=Math.max(last.high,p);last.low=Math.min(last.low,p);if(msg.side==='buy'){last.buyVol++;last.delta++;}else{last.sellVol++;last.delta--;}}
     TFS.forEach(tf=>{if(mtfData[tf]){const d=mtfData[tf];['bias','delta','mom'].forEach(k=>{d[k]=Math.max(-1,Math.min(1,d[k]+rnd(-0.05,0.05)));});}});
@@ -495,9 +361,6 @@ function draw(){
   const fvgs=inds.fvg?detectFVG(vc):[];
   const smcZ=inds.smc?detectSMC(vc):[];
   const pools=inds.liq?detectLiq(vc):[];
-
-  // DOM Liquidity Heatmap (behind everything)
-  if(inds.domliq){try{drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP);}catch(e){}}
 
   // Grid
   ctx.strokeStyle=_t.gridLine;ctx.lineWidth=0.5;
@@ -856,7 +719,6 @@ function demoUpdate(){
   $('pc').textContent=(chg>=0?'+':'')+chg.toFixed(2)+' ('+(chg>=0?'+':'')+pct+'%)';
   $('pc').className='pchg '+(chg>=0?'pos':'neg');
   genDOMDemo(p);
-  if(inds.domliq)updateDomLiq(p);
   TFS.forEach(tf=>{if(mtfData[tf]){const d=mtfData[tf];['bias','delta','mom'].forEach(k=>{d[k]=Math.max(-1,Math.min(1,d[k]+rnd(-0.08,0.08)));});}});
 }
 
@@ -886,13 +748,15 @@ function setupInteractions(){
     }
   },{passive:false});
 
-  // Drag handling - left drag pans both horizontal AND vertical
-  let dragX=0,dragY=0,dragOff=0,dragYOff=0,dragging=false;
+  // Drag handling
+  let dragX=0,dragY=0,dragOff=0,dragYOff=0,dragging=false,isVertDrag=false;
   mc.addEventListener('mousedown',e=>{
     dragging=true;
     dragX=e.clientX;dragY=e.clientY;
     dragOff=viewOffset;dragYOff=yOffset;
-    mc.style.cursor='grabbing';
+    // Shift+drag OR middle button = vertical pan
+    isVertDrag=(e.shiftKey||e.button===1);
+    mc.style.cursor=isVertDrag?'ns-resize':'grabbing';
     e.preventDefault();
   });
   mc.addEventListener('contextmenu',e=>e.preventDefault());
@@ -900,14 +764,17 @@ function setupInteractions(){
   window.addEventListener('mousemove',e=>{
     if(!dragging)return;
     const mc2=$('mc');if(!mc2)return;
-    // Horizontal pan
-    const dx=e.clientX-dragX,bpp=viewBars/mc2.width;
-    viewOffset=Math.round(dragOff+dx*bpp);
-    clampOff();
-    // Vertical pan simultaneously
-    const dy=dragY-e.clientY;
-    yOffset=dragYOff+dy/40;
-    yOffset=Math.max(-15,Math.min(15,yOffset));
+    if(isVertDrag){
+      // Vertical pan - drag up = see higher prices, drag down = see lower prices
+      const dy=dragY-e.clientY; // invert: drag up = positive
+      yOffset=dragYOff+dy/40;
+      yOffset=Math.max(-15,Math.min(15,yOffset));
+    } else {
+      // Horizontal pan
+      const dx=e.clientX-dragX,bpp=viewBars/mc2.width;
+      viewOffset=Math.round(dragOff+dx*bpp);
+      clampOff();
+    }
   });
 
   window.addEventListener('mouseup',()=>{
