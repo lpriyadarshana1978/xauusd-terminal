@@ -16,7 +16,7 @@ feeder_clients = set()
 async def broadcast_to_charts(message):
     global chart_clients
     dead = set()
-    for ws in chart_clients:
+    for ws in list(chart_clients):
         try:
             await ws.send(message)
         except Exception:
