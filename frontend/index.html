@@ -64,7 +64,6 @@ body{display:flex;flex-direction:column;font-family:'Courier New',monospace;font
   <button class="indbtn" id="b-wyc" onclick="tog('wyc')" style="border-color:#00ccff;color:#00ccff;">WYC</button>
   <button class="indbtn" id="b-ew" onclick="tog('ew')" style="border-color:#ff44ff;color:#ff44ff;">EW</button>
   <button class="indbtn on" id="b-domliq" onclick="tog('domliq')" style="border-color:#00ffcc;color:#00ffcc;">DOM-LIQ</button>
-  <button class="indbtn on" id="b-domliq" onclick="tog('domliq')" style="border-color:#00ffcc;color:#00ffcc;">DOM-LIQ</button>
   <div style="display:flex;gap:2px;margin-left:4px;">
     <button class="tfb" onclick="zoomIn()">+</button>
     <button class="tfb" onclick="zoomOut()">−</button>
@@ -213,268 +212,80 @@ let viewBars=6,viewOffset=0,yOffset=0,bubbleTick=0; // yOffset shifts price rang
 const MIN_BARS=2,MAX_BARS=120;
 
 
-// ── DOM Liquidity Heatmap (Time-Based ATAS Style) ────
-let domLiqSnaps={};  // key=barTime -> {levels:[{price,bidVol,askVol}]}
-let domLiqLast=0;
-let domLiqGlobalMax=500;
+// ── DOM Liquidity Heatmap (ATAS Style) ───────────────
+let domLiqSnaps={};
+let _domLiqLast=0;
+let _domLiqGMax=500;
 function updateDomLiq(price){
-  const now=Date.now();if(now-domLiqLast<400)return;domLiqLast=now;
-  // Get current bar time
-  const cs=candles[currentTF];if(!cs||!cs.length)return;
-  const barTime=cs[cs.length-1].time||Math.floor(now/1000);
-  const step=0.10,levels=[];
-  for(let i=-35;i<=35;i++){
-    const p=Math.round((price+i*step)*100)/100,dist=Math.abs(i);
-    const base=Math.max(30,700-dist*16+Math.random()*250);
-    const isRound=(p%1<0.05||p%1>0.95),isHalf=(Math.abs(p%1-0.5)<0.05);
-    const isFive=(p%5<0.1||p%5>4.9);
-    const cluster=isFive?base*3.5:isRound?base*2.5:isHalf?base*1.6:base;
-    if(i<0)levels.push({price:p,bidVol:Math.floor(cluster),askVol:0});
-    else if(i>0)levels.push({price:p,bidVol:0,askVol:Math.floor(cluster)});
+  var now=Date.now();if(now-_domLiqLast<400)return;_domLiqLast=now;
+  var cs2=candles[currentTF];if(!cs2||!cs2.length)return;
+  var barTime=cs2[cs2.length-1].time||Math.floor(now/1000);
+  var step=0.10,levels=[];
+  for(var ii=-35;ii<=35;ii++){
+    var p=Math.round((price+ii*step)*100)/100,dist=Math.abs(ii);
+    var base=Math.max(30,700-dist*16+Math.random()*250);
+    var isFive=(p%5<0.1||p%5>4.9),isRound=(p%1<0.05||p%1>0.95),isHalf=(Math.abs(p%1-0.5)<0.05);
+    var cluster=isFive?base*3.5:isRound?base*2.5:isHalf?base*1.6:base;
+    if(ii<0)levels.push({price:p,bidVol:Math.floor(cluster),askVol:0});
+    else if(ii>0)levels.push({price:p,bidVol:0,askVol:Math.floor(cluster)});
     else levels.push({price:p,bidVol:Math.floor(180+Math.random()*120),askVol:Math.floor(180+Math.random()*120)});
   }
-  // Blend with previous snap for smoother transitions
-  const prev=domLiqSnaps[barTime];
-  if(prev){
-    levels.forEach((lv,idx)=>{
-      const pl=prev.levels.find(l=>Math.abs(l.price-lv.price)<0.01);
-      if(pl){lv.bidVol=Math.floor(pl.bidVol*0.7+lv.bidVol*0.3);lv.askVol=Math.floor(pl.askVol*0.7+lv.askVol*0.3);}
-    });
-  }
-  domLiqSnaps[barTime]={levels,price};
-  // Track global max for consistent coloring
-  const allMax=Math.max(...levels.map(l=>Math.max(l.bidVol,l.askVol)));
-  domLiqGlobalMax=Math.floor(domLiqGlobalMax*0.99+allMax*0.01);
-  // Cleanup old snapshots (keep last 300)
-  const keys=Object.keys(domLiqSnaps);
-  if(keys.length>300){keys.sort((a,b)=>a-b);for(let k=0;k<keys.length-300;k++)delete domLiqSnaps[keys[k]];}
+  var prev2=domLiqSnaps[barTime];
+  if(prev2){levels.forEach(function(lv){var pl=prev2.levels.find(function(l){return Math.abs(l.price-lv.price)<0.01;});if(pl){lv.bidVol=Math.floor(pl.bidVol*0.7+lv.bidVol*0.3);lv.askVol=Math.floor(pl.askVol*0.7+lv.askVol*0.3);}});}
+  domLiqSnaps[barTime]={levels:levels,price:price};
+  var allMax=Math.max.apply(null,levels.map(function(l){return Math.max(l.bidVol,l.askVol);}));
+  _domLiqGMax=Math.floor(_domLiqGMax*0.99+allMax*0.01);
+  var keys=Object.keys(domLiqSnaps);if(keys.length>300){keys.sort();for(var kk=0;kk<keys.length-300;kk++)delete domLiqSnaps[keys[kk]];}
 }
-// ── 1H DOM Liquidity Top/Bottom Panels ────────────────
-let domLiq1H={};  // barTime -> {levels}
-let domLiq1HLast=0;
-let domLiq1HMax=500;
-
-function update1HDomLiq(price){
-  const now=Date.now();if(now-domLiq1HLast<800)return;domLiq1HLast=now;
-  // Get 1H bar time
-  const barTime=Math.floor(Math.floor(now/1000)/3600)*3600;
-  const step=0.20,levels=[];
-  for(let i=-50;i<=50;i++){
-    const p=Math.round((price+i*step)*100)/100,dist=Math.abs(i);
-    const base=Math.max(40,900-dist*14+Math.random()*300);
-    const isFive=(p%5<0.15||p%5>4.85),isRound=(p%1<0.08||p%1>0.92),isHalf=(Math.abs(p%1-0.5)<0.08);
-    const cluster=isFive?base*4:isRound?base*2.8:isHalf?base*1.7:base;
-    if(i<0)levels.push({price:p,bidVol:Math.floor(cluster),askVol:0});
-    else if(i>0)levels.push({price:p,bidVol:0,askVol:Math.floor(cluster)});
-    else levels.push({price:p,bidVol:Math.floor(cluster*0.4),askVol:Math.floor(cluster*0.4)});
-  }
-  const prev=domLiq1H[barTime];
-  if(prev){levels.forEach(lv=>{const pl=prev.levels.find(l=>Math.abs(l.price-lv.price)<0.01);if(pl){lv.bidVol=Math.floor(pl.bidVol*0.8+lv.bidVol*0.2);lv.askVol=Math.floor(pl.askVol*0.8+lv.askVol*0.2);}});}
-  domLiq1H[barTime]={levels,price};
-  const mx=Math.max(...levels.map(l=>Math.max(l.bidVol,l.askVol)));
-  domLiq1HMax=Math.floor(domLiq1HMax*0.98+mx*0.02);
-  const keys=Object.keys(domLiq1H);if(keys.length>50){keys.sort((a,b)=>a-b);for(let k=0;k<keys.length-50;k++)delete domLiq1H[keys[k]];}
-}
-
-function draw1HDomPanels(){
-  const dtC=$('domTop'),dbC=$('domBot');
-  if(!dtC||!dbC||!dtC.width)return;
-  const keys=Object.keys(domLiq1H).sort((a,b)=>a-b);
-  if(!keys.length)return;
-  const ctxT=dtC.getContext('2d'),ctxB=dbC.getContext('2d');
-  const W=dtC.width,H=dtC.height;
-  ctxT.fillStyle='#050510';ctxT.fillRect(0,0,W,H);
-  ctxB.fillStyle='#050510';ctxB.fillRect(0,0,W,H);
-  // Get visible bars count and use same column width
-  const cs=candles[currentTF];if(!cs||!cs.length)return;
-  const total=cs.length,nb=Math.max(2,Math.min(viewBars,total));
-  const pw=W-8-64,colW=Math.max(3,Math.floor(pw/nb));
-  const gMax=Math.max(domLiq1HMax,400);
-  // Get latest snapshot
-  const snap=domLiq1H[keys[keys.length-1]];if(!snap)return;
-  // Separate bid and ask levels
-  const bids=snap.levels.filter(l=>l.bidVol>0).sort((a,b)=>b.price-a.price);
-  const asks=snap.levels.filter(l=>l.askVol>0).sort((a,b)=>a.price-b.price);
-  const bidMax=Math.max(...bids.map(l=>l.bidVol),1);
-  const askMax=Math.max(...asks.map(l=>l.askVol),1);
-  // Draw top panel - bid liquidity (green bars going up)
-  // Each column = a time snapshot, each row = price level
-  const off=Math.max(0,Math.min(viewOffset,Math.max(0,total-nb)));
-  const si=Math.max(0,total-nb-off);
-  for(let ci=0;ci<nb;ci++){
-    const c=cs[si+ci];if(!c)continue;
-    const x=8+ci*colW;
-    // Use per-candle snapshot if available, else latest
-    const cSnap=domLiqSnaps[c.time]||snap;
-    const cBids=cSnap.levels.filter(l=>l.bidVol>0).sort((a,b)=>b.bidVol-a.bidVol).slice(0,12);
-    const rowH=Math.max(2,Math.floor(H/Math.max(cBids.length,1)));
-    cBids.forEach((lv,ri)=>{
-      const t=Math.min(1,lv.bidVol/gMax);if(t<0.03)return;
-      const y=H-ri*rowH-rowH;
-      let r,g,b;
-      if(t<0.2){r=0;g=Math.floor(30+t*300);b=Math.floor(50+t*400);}
-      else if(t<0.5){r=0;g=Math.floor(100+t*310);b=Math.floor(80+t*150);}
-      else{r=Math.floor(t*100);g=Math.floor(200+t*55);b=Math.floor(t*50);}
-      ctxT.fillStyle='rgba('+r+','+g+','+b+','+(0.3+t*0.6)+')';
-      ctxT.fillRect(x,y,colW-1,rowH-1);
-    });
-  }
-  // Draw bottom panel - ask liquidity (red bars going down)
-  for(let ci=0;ci<nb;ci++){
-    const c=cs[si+ci];if(!c)continue;
-    const x=8+ci*colW;
-    const cSnap=domLiqSnaps[c.time]||snap;
-    const cAsks=cSnap.levels.filter(l=>l.askVol>0).sort((a,b)=>b.askVol-a.askVol).slice(0,12);
-    const rowH=Math.max(2,Math.floor(H/Math.max(cAsks.length,1)));
-    cAsks.forEach((lv,ri)=>{
-      const t=Math.min(1,lv.askVol/gMax);if(t<0.03)return;
-      const y=ri*rowH;
-      let r,g,b;
-      if(t<0.2){r=Math.floor(50+t*400);g=0;b=Math.floor(50+t*400);}
-      else if(t<0.5){r=Math.floor(150+t*210);g=Math.floor(t*40);b=Math.floor(80+t*100);}
-      else{r=Math.floor(220+t*35);g=Math.floor(t*100);b=Math.floor(t*30);}
-      ctxB.fillStyle='rgba('+r+','+g+','+b+','+(0.3+t*0.6)+')';
-      ctxB.fillRect(x,y,colW-1,rowH-1);
-    });
-  }
-  // Labels
-  ctxT.fillStyle='#00e67666';ctxT.font='bold 8px monospace';ctxT.textAlign='left';
-  ctxT.fillText('BID DEPTH (1H DOM)',10,10);
-  ctxB.fillStyle='#f4433666';ctxB.font='bold 8px monospace';ctxB.textAlign='left';
-  ctxB.fillText('ASK DEPTH (1H DOM)',10,10);
-}
-
 function drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP){
   if(!Object.keys(domLiqSnaps).length)return;
-  const colW=Math.max(3,Math.floor(pw/vn));
-  const gMax=Math.max(domLiqGlobalMax,400);
-  const step=0.10;
-  const priceStep=Math.max(step,((maxP-minP)/120));
-  // Draw thick heatmap columns per candle
-  vc.forEach((c,ci)=>{
-    const snap=domLiqSnaps[c.time];if(!snap)return;
-    const x=P.l+ci*colW;
-    snap.levels.forEach(lv=>{
+  var colW=Math.max(3,Math.floor(pw/vn));
+  var gMax=Math.max(_domLiqGMax,400);
+  vc.forEach(function(c,ci){
+    var snap=domLiqSnaps[c.time];if(!snap)return;
+    var x=P.l+ci*colW;
+    snap.levels.forEach(function(lv){
       if(lv.price<minP-1||lv.price>maxP+1)return;
-      const y=py(lv.price);
-      const bandH=Math.max(3,Math.abs(py(lv.price)-py(lv.price+priceStep))+1);
+      var y=py(lv.price);
+      var bandH=Math.max(3,Math.abs(py(lv.price)-py(lv.price+0.10))+1);
       if(lv.bidVol>0){
-        const t=Math.min(1,lv.bidVol/gMax);if(t<0.03)return;
-        let r,g,b;
-        if(t<0.15){r=0;g=Math.floor(20+t*200);b=Math.floor(60+t*400);}
-        else if(t<0.35){r=0;g=Math.floor(60+t*400);b=Math.floor(120+t*200);}
-        else if(t<0.6){r=0;g=Math.floor(150+t*170);b=Math.floor(100+t*100);}
-        else{r=Math.floor(t*120);g=Math.floor(220+t*35);b=Math.floor(t*60);}
-        ctx.fillStyle='rgba('+r+','+g+','+b+','+(0.25+t*0.65)+')';
+        var t=Math.min(1,lv.bidVol/gMax);if(t<0.03)return;
+        var r2=0,g2=Math.floor(60+t*195),b2=Math.floor(80+t*175);
+        if(t>0.5){r2=Math.floor(t*80);g2=Math.floor(200+t*55);b2=Math.floor(t*50);}
+        ctx.fillStyle="rgba("+r2+","+g2+","+b2+","+(0.2+t*0.6)+")";
         ctx.fillRect(x,y-bandH/2,colW,bandH);
       }
       if(lv.askVol>0){
-        const t=Math.min(1,lv.askVol/gMax);if(t<0.03)return;
-        let r,g,b;
-        if(t<0.15){r=Math.floor(40+t*300);g=0;b=Math.floor(60+t*400);}
-        else if(t<0.35){r=Math.floor(120+t*300);g=0;b=Math.floor(100+t*200);}
-        else if(t<0.6){r=Math.floor(200+t*55);g=Math.floor(t*50);b=Math.floor(80+t*80);}
-        else{r=Math.floor(230+t*25);g=Math.floor(t*130);b=Math.floor(t*40);}
-        ctx.fillStyle='rgba('+r+','+g+','+b+','+(0.25+t*0.65)+')';
+        var t2=Math.min(1,lv.askVol/gMax);if(t2<0.03)return;
+        var r3=Math.floor(100+t2*155),g3=Math.floor(t2*40),b3=Math.floor(60+t2*140);
+        if(t2>0.5){r3=Math.floor(220+t2*35);g3=Math.floor(t2*80);b3=Math.floor(t2*30);}
+        ctx.fillStyle="rgba("+r3+","+g3+","+b3+","+(0.2+t2*0.6)+")";
         ctx.fillRect(x,y-bandH/2,colW,bandH);
       }
     });
   });
-  // Right-side volume profile bars
-  const lastSnap=domLiqSnaps[vc[vc.length-1]?.time];
+  ctx.fillStyle="#00ffcc99";ctx.font="bold 9px monospace";ctx.textAlign="right";
+  ctx.fillText("Live DOM Liquidity",P.l+pw-4,P.t+12);
+  var lastSnap=domLiqSnaps[vc[vc.length-1]?vc[vc.length-1].time:0];
   if(lastSnap){
-    const profX=P.l+pw+2,profW=56;
-    const pMax=Math.max(...lastSnap.levels.map(l=>Math.max(l.bidVol,l.askVol)),1);
-    lastSnap.levels.forEach(lv=>{
-      if(lv.price<minP||lv.price>maxP)return;
-      const y=py(lv.price);
-      const bandH=Math.max(2,Math.abs(py(lv.price)-py(lv.price+priceStep)));
-      if(lv.bidVol>0){
-        const w=Math.floor(profW*(lv.bidVol/pMax));
-        ctx.fillStyle='rgba(0,200,120,0.5)';
-        ctx.fillRect(profX,y-bandH/2,w,bandH-1);
-      }
-      if(lv.askVol>0){
-        const w=Math.floor(profW*(lv.askVol/pMax));
-        ctx.fillStyle='rgba(220,40,60,0.5)';
-        ctx.fillRect(profX,y-bandH/2,w,bandH-1);
-      }
-    });
+    var tB=0,tA=0;lastSnap.levels.forEach(function(l){tB+=l.bidVol;tA+=l.askVol;});
+    ctx.fillStyle="#00e67688";ctx.textAlign="left";ctx.fillText("LIQ: "+(tB/1000).toFixed(1)+"K",P.l+4,ph+P.t-4);
+    ctx.fillStyle="#f4433688";ctx.textAlign="right";ctx.fillText("LIQ: "+(tA/1000).toFixed(1)+"K",P.l+pw-4,ph+P.t-4);
+    var nB=lastSnap.levels.filter(function(l){return l.bidVol>0;}).slice(-5).reduce(function(s,l){return s+l.bidVol;},0);
+    var nA=lastSnap.levels.filter(function(l){return l.askVol>0;}).slice(0,5).reduce(function(s,l){return s+l.askVol;},0);
+    var nT=nB+nA||1,bPct=Math.round(nB/nT*100),aPct=100-bPct;
+    var bx=P.l+pw-185,byy=P.t+18,bW=172,bH=9;
+    ctx.fillStyle="#00000088";ctx.fillRect(bx,byy,180,34);
+    ctx.strokeStyle="#ffffff20";ctx.lineWidth=1;ctx.strokeRect(bx,byy,180,34);
+    ctx.fillStyle="#ffffff66";ctx.font="bold 7px monospace";ctx.textAlign="center";
+    ctx.fillText("NEAR DOM POWER",bx+90,byy+9);
+    var bidW3=Math.floor(bW*bPct/100);
+    ctx.fillStyle="#00e676";ctx.fillRect(bx+4,byy+13,bidW3,bH);
+    ctx.fillStyle="#f44336";ctx.fillRect(bx+4+bidW3,byy+13,bW-bidW3,bH);
+    ctx.font="bold 8px monospace";
+    ctx.fillStyle="#00e676";ctx.textAlign="left";ctx.fillText((nB/1000).toFixed(1)+"K "+bPct+"%",bx+4,byy+31);
+    ctx.fillStyle="#f44336";ctx.textAlign="right";ctx.fillText(aPct+"% "+(nA/1000).toFixed(1)+"K",bx+176,byy+31);
   }
-  // Labels
-  ctx.fillStyle='#00ffccaa';ctx.font='bold 9px monospace';ctx.textAlign='right';
-  ctx.fillText('Live DOM Liquidity',P.l+pw-4,P.t+12);
-  if(lastSnap){
-    let tB=0,tA=0;lastSnap.levels.forEach(l=>{tB+=l.bidVol;tA+=l.askVol;});
-    ctx.fillStyle='#00e67699';ctx.textAlign='left';ctx.fillText('LIQ: '+(tB/1000).toFixed(1)+'K',P.l+4,ph+P.t-4);
-    ctx.fillStyle='#f4433699';ctx.textAlign='right';ctx.fillText('LIQ: '+(tA/1000).toFixed(1)+'K',P.l+pw-4,ph+P.t-4);
-    const nB=lastSnap.levels.filter(l=>l.bidVol>0).slice(-5).reduce((s,l)=>s+l.bidVol,0);
-    const nA=lastSnap.levels.filter(l=>l.askVol>0).slice(0,5).reduce((s,l)=>s+l.askVol,0);
-    const nT=nB+nA||1,bPct=Math.round(nB/nT*100),aPct=100-bPct;
-    const bx=P.l+pw-185,by=P.t+18,bW=172,bH=9;
-    ctx.fillStyle='#00000088';ctx.fillRect(bx,by,180,34);
-    ctx.strokeStyle='#ffffff20';ctx.lineWidth=1;ctx.strokeRect(bx,by,180,34);
-    ctx.fillStyle='#ffffff66';ctx.font='bold 7px monospace';ctx.textAlign='center';
-    ctx.fillText('NEAR DOM POWER \u00B10.5%',bx+90,by+9);
-    const bidW2=Math.floor(bW*bPct/100);
-    ctx.fillStyle='#00e676';ctx.fillRect(bx+4,by+13,bidW2,bH);
-    ctx.fillStyle='#f44336';ctx.fillRect(bx+4+bidW2,by+13,bW-bidW2,bH);
-    ctx.font='bold 8px monospace';
-    ctx.fillStyle='#00e676';ctx.textAlign='left';ctx.fillText((nB/1000).toFixed(1)+'K  '+bPct+'%',bx+4,by+31);
-    ctx.fillStyle='#f44336';ctx.textAlign='right';ctx.fillText(aPct+'%  '+(nA/1000).toFixed(1)+'K',bx+176,by+31);
-  }
-}
-
-
-// ── DOM Liquidity Heatmap ────────────────────────────
-let domLiqHistory=[];
-const DOM_LIQ_MAX=80;
-let domLiqLast=0;
-function updateDomLiq(price){
-  const now=Date.now();if(now-domLiqLast<500)return;domLiqLast=now;
-  const step=0.10,levels=[];
-  for(let i=-30;i<=30;i++){
-    const p=Math.round((price+i*step)*100)/100,dist=Math.abs(i);
-    const base=Math.max(50,800-dist*20+Math.random()*200);
-    const isRound=(p%1<0.05||p%1>0.95),isHalf=(Math.abs(p%1-0.5)<0.05);
-    const cluster=isRound?base*2.5:isHalf?base*1.6:base;
-    if(i<0)levels.push({price:p,bidVol:Math.floor(cluster),askVol:0});
-    else if(i>0)levels.push({price:p,bidVol:0,askVol:Math.floor(cluster)});
-    else levels.push({price:p,bidVol:Math.floor(200+Math.random()*100),askVol:Math.floor(200+Math.random()*100)});
-  }
-  domLiqHistory.push({levels});
-  if(domLiqHistory.length>DOM_LIQ_MAX)domLiqHistory.shift();
-}
-function drawDomLiqHeatmap(ctx,pw,ph,P,py,minP,maxP){
-  if(!domLiqHistory.length)return;
-  const snap=domLiqHistory[domLiqHistory.length-1];if(!snap)return;
-  const maxVol=Math.max(...snap.levels.map(l=>Math.max(l.bidVol,l.askVol)));
-  if(maxVol<=0)return;
-  snap.levels.forEach(lv=>{
-    if(lv.price<minP||lv.price>maxP)return;
-    const y=py(lv.price),bandH=Math.max(2,Math.abs(py(lv.price)-py(lv.price+0.10)));
-    if(lv.bidVol>0){const int=Math.min(1,lv.bidVol/maxVol),a=0.06+int*0.35;ctx.fillStyle='rgba(0,'+(100+Math.floor(int*155))+','+(80+Math.floor(int*100))+','+a+')';ctx.fillRect(P.l,y-bandH/2,pw,bandH);if(int>0.6){ctx.fillStyle='rgba(0,255,200,'+(int*0.15)+')';ctx.fillRect(P.l,y-1,pw,2);}}
-    if(lv.askVol>0){const int=Math.min(1,lv.askVol/maxVol),a=0.06+int*0.35;ctx.fillStyle='rgba('+(150+Math.floor(int*105))+','+(20+Math.floor(int*30))+','+(40+Math.floor(int*60))+','+a+')';ctx.fillRect(P.l,y-bandH/2,pw,bandH);if(int>0.6){ctx.fillStyle='rgba(255,50,80,'+(int*0.15)+')';ctx.fillRect(P.l,y-1,pw,2);}}
-  });
-  ctx.fillStyle='#00ffcc88';ctx.font='bold 9px monospace';ctx.textAlign='right';
-  ctx.fillText('Live DOM Liquidity',P.l+pw-4,P.t+12);
-  let tB=0,tA=0;snap.levels.forEach(l=>{tB+=l.bidVol;tA+=l.askVol;});
-  ctx.fillStyle='#00e67688';ctx.textAlign='left';ctx.fillText('LIQ: '+(tB/1000).toFixed(1)+'K',P.l+4,ph+P.t-4);
-  ctx.fillStyle='#f4433688';ctx.textAlign='right';ctx.fillText('LIQ: '+(tA/1000).toFixed(1)+'K',P.l+pw-4,ph+P.t-4);
-  // Near DOM Power
-  const nB=snap.levels.filter(l=>l.bidVol>0).slice(-5).reduce((s,l)=>s+l.bidVol,0);
-  const nA=snap.levels.filter(l=>l.askVol>0).slice(0,5).reduce((s,l)=>s+l.askVol,0);
-  const nT=nB+nA||1,bP=Math.round(nB/nT*100),aP=100-bP;
-  const bx=P.l+pw-180,by=P.t+18,bW=168,bH=8;
-  ctx.fillStyle='#00000066';ctx.fillRect(bx,by,176,30);
-  ctx.fillStyle='#ffffff55';ctx.font='bold 7px monospace';ctx.textAlign='center';
-  ctx.fillText('NEAR DOM POWER',bx+88,by+8);
-  const bidW=Math.floor(bW*bP/100);
-  ctx.fillStyle='#00e676';ctx.fillRect(bx+4,by+11,bidW,bH);
-  ctx.fillStyle='#f44336';ctx.fillRect(bx+4+bidW,by+11,bW-bidW,bH);
-  ctx.font='bold 8px monospace';
-  ctx.fillStyle='#00e676';ctx.textAlign='left';ctx.fillText(bP+'%',bx+4,by+28);
-  ctx.fillStyle='#f44336';ctx.textAlign='right';ctx.fillText(aP+'%',bx+172,by+28);
 }
 
 // ── Demo data ─────────────────────────────────────────
@@ -584,7 +395,6 @@ function resize(){
 
   wrap.style.height=chartH+'px';
   const mc=$('mc');if(mc){mc.width=W;mc.height=chartH;}
-
   const tc=$('tc');if(tc){tc.width=W;tc.height=20;}
   const dc=$('dc');if(dc){dc.width=W;dc.height=50;}
   const sc=$('sc');if(sc){sc.width=W;sc.height=72;}
@@ -631,11 +441,7 @@ function draw(){
   const smcZ=inds.smc?detectSMC(vc):[];
   const pools=inds.liq?detectLiq(vc):[];
 
-  // DOM Liquidity Heatmap
   if(inds.domliq){try{drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP);}catch(e){}}
-
-  // DOM Liquidity Heatmap
-  if(inds.domliq){try{drawDomLiqHeatmap(ctx,pw,ph,P,py,minP,maxP);}catch(e){}}
 
   // Grid
   ctx.strokeStyle=_t.gridLine;ctx.lineWidth=0.5;
@@ -748,30 +554,22 @@ function draw(){
       ctx.fillStyle=tc2;ctx.textAlign='center';ctx.textBaseline='middle';
       ctx.fillText(dl,midX,dY+dH/2);ctx.textBaseline='alphabetic';
     }
-
-    // Candle countdown timer on last candle
+    // Candle countdown timer
     if(i===vn-1&&c.time){
-      const tfSec={'1m':60,'5m':300,'15m':900,'1h':3600,'2h':7200,'4h':14400,'1d':86400};
-      const barLen=tfSec[currentTF]||900;
-      const now=Math.floor(Date.now()/1000);
-      const elapsed=now-c.time;
-      const remain=Math.max(0,barLen-elapsed);
-      const mins=Math.floor(remain/60);
-      const secs=remain%60;
-      const tmr=mins+':'+String(secs).padStart(2,'0');
-      // Draw timer background
-      const tmX=x+bw+4,tmY=py(c.close)-8;
-      ctx.fillStyle='#000000aa';
-      const tmW=ctx.measureText(tmr).width||30;
+      var tfSec2={'1m':60,'5m':300,'15m':900,'1h':3600,'2h':7200,'4h':14400,'1d':86400};
+      var barLen2=tfSec2[currentTF]||900;
+      var now2=Math.floor(Date.now()/1000);
+      var remain2=Math.max(0,barLen2-(now2-c.time));
+      var mins2=Math.floor(remain2/60),secs2=remain2%60;
+      var tmr2=mins2+':'+String(secs2).padStart(2,'0');
+      var tmX2=x+bw+4,tmY2=py(c.close)-8;
       ctx.font='bold 10px monospace';
-      const tw2=ctx.measureText(tmr).width+8;
-      ctx.fillStyle='#00000099';ctx.fillRect(tmX,tmY-1,tw2,16);
-      ctx.strokeStyle=remain<30?'#ff4444':'#ffffff33';ctx.lineWidth=1;ctx.strokeRect(tmX,tmY-1,tw2,16);
-      // Timer text - flash red when <30s
-      const tmCol=remain<30?(Math.floor(Date.now()/500)%2===0?'#ff4444':'#ff8888'):remain<60?'#ffdd00':'#00ccff';
-      ctx.fillStyle=tmCol;ctx.font='bold 10px monospace';ctx.textAlign='left';ctx.textBaseline='middle';
-      ctx.fillText(tmr,tmX+4,tmY+7);
-      ctx.textBaseline='alphabetic';
+      var tw3=ctx.measureText(tmr2).width+8;
+      ctx.fillStyle='#00000099';ctx.fillRect(tmX2,tmY2-1,tw3,16);
+      ctx.strokeStyle=remain2<30?'#ff4444':'#ffffff33';ctx.lineWidth=1;ctx.strokeRect(tmX2,tmY2-1,tw3,16);
+      var tmCol2=remain2<30?(Math.floor(Date.now()/500)%2===0?'#ff4444':'#ff8888'):remain2<60?'#ffdd00':'#00ccff';
+      ctx.fillStyle=tmCol2;ctx.textAlign='left';ctx.textBaseline='middle';
+      ctx.fillText(tmr2,tmX2+4,tmY2+7);ctx.textBaseline='alphabetic';
     }
   });
 
@@ -1063,13 +861,11 @@ function setupInteractions(){
   window.addEventListener('mousemove',e=>{
     if(!dragging)return;
     const mc2=$('mc');if(!mc2)return;
-    // Pan both horizontal and vertical
+    // Pan both directions
       const dx=e.clientX-dragX,bpp=viewBars/mc2.width;
-      viewOffset=Math.round(dragOff+dx*bpp);
-      clampOff();
+      viewOffset=Math.round(dragOff+dx*bpp);clampOff();
       const dy=dragY-e.clientY;
-      yOffset=dragYOff+dy/40;
-      yOffset=Math.max(-15,Math.min(15,yOffset));
+      yOffset=dragYOff+dy/40;yOffset=Math.max(-15,Math.min(15,yOffset));
   });
 
   window.addEventListener('mouseup',()=>{
