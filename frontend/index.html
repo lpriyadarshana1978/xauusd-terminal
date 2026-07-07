@@ -84,9 +84,7 @@ body{display:flex;flex-direction:column;font-family:'Courier New',monospace;font
 <div class="main-row">
   <div class="left-col">
     <div class="chart-canvas-wrap" id="chartWrap">
-      <canvas id="domTop" style="display:block;height:45px;background:#050510;border-bottom:1px solid #1a1a28;"></canvas>
       <canvas id="mc" style="display:block;"></canvas>
-      <canvas id="domBot" style="display:block;height:45px;background:#050510;border-top:1px solid #1a1a28;"></canvas>
     </div>
     <canvas id="tc" class="strip" style="display:block;height:20px;border-top:1px solid #1e1e2e;background:#07070e;"></canvas>
     <canvas id="dc" class="strip" style="display:block;height:50px;border-top:1px solid #1e1e2e;background:#07070e;"></canvas>
@@ -500,7 +498,7 @@ function handleMsg(msg){
     $('pc').className='pchg '+(chg>=0?'pos':'neg');
     set('sv-spread',msg.spread,'#aaa');
     genDOMDemo(p);
-    if(inds.domliq){updateDomLiq(p);update1HDomLiq(p);}
+    if(inds.domliq)updateDomLiq(p);
     const cs=candles[currentTF];
     if(cs?.length){const last=cs[cs.length-1];last.close=p;last.high=Math.max(last.high,p);last.low=Math.min(last.low,p);if(msg.side==='buy'){last.buyVol++;last.delta++;}else{last.sellVol++;last.delta--;}}
     TFS.forEach(tf=>{if(mtfData[tf]){const d=mtfData[tf];['bias','delta','mom'].forEach(k=>{d[k]=Math.max(-1,Math.min(1,d[k]+rnd(-0.05,0.05)));});}});
@@ -527,14 +525,13 @@ function resize(){
   if(!wrap)return;
   // Calculate chart height from remaining space
   const totalH=window.innerHeight;
-  const usedH=30+22+20+50+72+62+90; // topbar+statsbar+timeaxis+cvd+stats+mtf+domliq panels
+  const usedH=30+22+20+50+72+62; // topbar+statsbar+timeaxis+cvd+stats+mtf
   const chartH=Math.max(200,totalH-usedH);
   const W=Math.max(300,window.innerWidth-162);
 
   wrap.style.height=chartH+'px';
   const mc=$('mc');if(mc){mc.width=W;mc.height=chartH;}
-  const dt=$('domTop');if(dt){dt.width=W;dt.height=45;}
-  const db=$('domBot');if(db){db.width=W;db.height=45;}
+
   const tc=$('tc');if(tc){tc.width=W;tc.height=20;}
   const dc=$('dc');if(dc){dc.width=W;dc.height=50;}
   const sc=$('sc');if(sc){sc.width=W;sc.height=72;}
@@ -1028,7 +1025,7 @@ function loop(){
   try{drawTime();}catch(e){}
   try{drawCVD();}catch(e){}
   try{drawStats();}catch(e){}
-  if(tick%4===0){try{renderDOM();}catch(e){}if(inds.domliq)try{draw1HDomPanels();}catch(e){}}
+  if(tick%4===0)try{renderDOM();}catch(e){}
   if(tick%5===0){try{updateStats();}catch(e){}try{renderWhales();}catch(e){}}
   if(tick%8===0)try{renderMTF();}catch(e){}
   requestAnimationFrame(loop);
