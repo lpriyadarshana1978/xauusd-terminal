@@ -26,6 +26,21 @@ TICK_INTERVAL = 0.05  # 20 ticks/sec for accuracy
 tick_store = {}
 last_tick_data = {}
 
+# Cache each symbol's true decimal precision from MT5 itself (2 for XAU, 3 for JPY pairs,
+# 5 for majors like EURUSD) instead of assuming gold's 2-decimal precision everywhere.
+_digits_cache = {}
+def get_digits(symbol):
+    if symbol not in _digits_cache:
+        info = mt5.symbol_info(symbol)
+        _digits_cache[symbol] = info.digits if info else 2
+    return _digits_cache[symbol]
+
+def get_price_step(symbol):
+    # A footprint bucket of "5 points" scaled to the symbol's own precision.
+    # For XAU (2 digits) this reproduces the original 0.05 step exactly.
+    # For EURUSD (5 digits) it becomes 0.00005; for USDJPY (3 digits) it becomes 0.005.
+    return 5 * (10 ** -get_digits(symbol))
+
 TF_SECONDS = {
     "1m":  60,
     "5m":  300,
@@ -68,7 +83,8 @@ def classify_tick(symbol, tick):
 
 def record_tick(symbol, tick, side):
     price = tick.last if tick.last > 0 else (tick.bid + tick.ask) / 2
-    price_level = round(round(price / 0.05) * 0.05, 2)
+    step = get_price_step(symbol)
+    price_level = round(round(price / step) * step, get_digits(symbol))
     vol = max(1, int(tick.volume_real) if tick.volume_real > 0 else 1)
     for tf in TF_SECONDS:
         bar_t = get_bar_time(tick.time, tf)
@@ -142,6 +158,7 @@ def get_rates(symbol, timeframe_str, count=200):
         td = get_tick_data(symbol, timeframe_str, bar_t)
         total_vol = int(r["tick_volume"])
         isBull = float(r["close"]) >= float(r["open"])
+        digits = get_digits(symbol)
 
         if td and td["vol"] > 0:
             buy_vol  = td["buy"]
@@ -159,11 +176,11 @@ def get_rates(symbol, timeframe_str, count=200):
             buy_vol  = int(total_vol * (dominance if isBull else 1-dominance))
             sell_vol = total_vol - buy_vol
             delta    = buy_vol - sell_vol if isBull else -(sell_vol - buy_vol)
-            step = 0.05
+            step = get_price_step(symbol)
             steps = max(4, int(pr / step)) if pr > 0 else 4
             levels = []
             for i in range(steps + 1):
-                p = round(float(r["low"]) + (pr / steps) * i, 2) if steps > 0 else float(r["close"])
+                p = round(float(r["low"]) + (pr / steps) * i, digits) if steps > 0 else float(r["close"])
                 dist = abs(p - float(r["close"])) / pr if pr > 0 else 0.5
                 w = max(0.1, 1 - dist * 1.8)
                 lv = max(1, int((total_vol / steps) * w * 1.5))
@@ -178,10 +195,10 @@ def get_rates(symbol, timeframe_str, count=200):
 
         result.append({
             "time":    bar_t,
-            "open":    float(round(r["open"],  2)),
-            "high":    float(round(r["high"],  2)),
-            "low":     float(round(r["low"],   2)),
-            "close":   float(round(r["close"], 2)),
+            "open":    float(round(r["open"],  digits)),
+            "high":    float(round(r["high"],  digits)),
+            "low":     float(round(r["low"],   digits)),
+            "close":   float(round(r["close"], digits)),
             "vol":     total_vol,
             "buyVol":  buy_vol,
             "sellVol": sell_vol,
