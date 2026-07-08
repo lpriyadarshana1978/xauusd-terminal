@@ -822,6 +822,22 @@ function demoUpdate(){
 
 // ── Controls ──────────────────────────────────────────
 window.setTF=function(tf){currentTF=tf;yOffset=0;document.querySelectorAll('.tfb').forEach(b=>{b.className='tfb'+(b.textContent===tf?' on':'');});if(wsLive&&ws)ws.send(JSON.stringify({type:'subscribe',symbol:currentSym,tf}));if(!candles[tf]?.length&&demoMode){candles[tf]=[];cvdHist[tf]=[];let cc=0;for(let i=0;i<20;i++){const c=demoCandle(candles[tf][candles[tf].length-1]);cc+=c.delta;c.cvd=cc;candles[tf].push(c);cvdHist[tf].push(cc);}}};
+
+window.changeSym=function(sym){
+  if(sym===currentSym)return;
+  currentSym=sym;
+  // wipe all per-symbol state so the old symbol's candles/levels never bleed into the new chart
+  candles={};cvdHist={};cvd=0;whaleAlerts=[];domLiqSnaps={};mtfData={};domData=[];
+  viewOffset=0;yOffset=0;openPrice=0;
+  set('lp','——');
+  const pcEl=$('pc');if(pcEl){pcEl.textContent='connecting...';pcEl.className='pchg';pcEl.style.color='#555';}
+  document.querySelectorAll('.tfb').forEach(b=>{b.className='tfb'+(b.textContent===currentTF?' on':'');});
+  if(wsLive&&ws&&ws.readyState===1){
+    ws.send(JSON.stringify({type:'subscribe',symbol:currentSym,tf:currentTF}));
+  }else{
+    initDemo();
+  }
+};
 window.tog=function(k){inds[k]=!inds[k];const b=$('b-'+k);if(b)b.className='indbtn'+(inds[k]?' on':'');};
 window.setMM=function(m){mtfMode=m;['bias','delta','vol','mom'].forEach(k=>{const b=$('mm-'+k);if(b)b.className='indbtn'+(k===m?' on':'');});};
 window.zoomIn=function(){viewBars=Math.max(MIN_BARS,Math.round(viewBars*0.75));clampOff();};
