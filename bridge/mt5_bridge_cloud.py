@@ -212,6 +212,17 @@ async def run():
     if not init_mt5():
         return
 
+    loop = asyncio.get_event_loop()
+    # MT5's Python API is fully synchronous/blocking. Calling it directly inside the asyncio
+    # event loop freezes the loop for however long each call takes - during that time the
+    # bridge can't respond to the relay's keepalive pings, so the relay concludes the feeder
+    # is dead and force-closes with 1011 (ping timeout). Running these calls in a thread pool
+    # keeps the event loop free to answer pings while MT5 does its (slow) network I/O.
+    async def fetch_rates(sym, tf, count):
+        return await loop.run_in_executor(None, get_rates, sym, tf, count)
+    async def fetch_tick(sym):
+        return await loop.run_in_executor(None, get_tick, sym)
+
     ssl_ctx = ssl.create_default_context()
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -224,14 +235,17 @@ async def run():
 
     while True:
         try:
-            async with websockets.connect(RELAY_URL, ssl=ssl_ctx) as ws:
+            # max_size must match the relay's 50MB limit - otherwise this client falls back to
+            # the websockets library default (~1MB) and can itself reject/kill the connection
+            # with 1009 (message too big) on a perfectly legitimate larger frame.
+            async with websockets.connect(RELAY_URL, ssl=ssl_ctx, max_size=50_000_000) as ws:
                 await ws.send(json.dumps({"role": "feeder", "secret": API_SECRET}))
                 print(f"[RELAY] Connected as feeder.")
 
                 # Send initial history with full footprint data
                 for sym in SYMBOLS:
                     for tf in ["1m","5m","15m","1h","4h","1d"]:
-                        rates = get_rates(sym, tf, 100)
+                        rates = await fetch_rates(sym, tf, 100)
                         if rates:
                             await ws.send(json.dumps({
                                 "type":   "history",
@@ -245,7 +259,7 @@ async def run():
                     while True:
                         try:
                             for sym in SYMBOLS:
-                                result = get_tick(sym)
+                                result = await fetch_tick(sym)
                                 if result is None:
                                     continue
                                 tick_dict, raw_tick = result
@@ -270,7 +284,7 @@ async def run():
                                     if now - last_bc > 2.0:
                                         bar_broadcast_time[sym] = now
                                         for tf in ["1m","5m","15m","1h","4h","1d"]:
-                                            rates = get_rates(sym, tf, 5)
+                                            rates = await fetch_rates(sym, tf, 5)
                                             if rates:
                                                 await ws.send(json.dumps({
                                                     "type":   "bar_update",
@@ -289,7 +303,7 @@ async def run():
                             if msg.get("type") == "subscribe":
                                 sym = msg.get("symbol","XAUUSDm")
                                 tf  = msg.get("tf","15m")
-                                rates = get_rates(sym, tf, 100)
+                                rates = await fetch_rates(sym, tf, 100)
                                 if rates:
                                     await ws.send(json.dumps({
                                         "type":   "history",

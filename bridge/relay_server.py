@@ -73,7 +73,7 @@ async def main():
     log.info(f"API_SECRET: {API_SECRET[:8]}...")
     log.info("Waiting for connections...")
 
-    async with websockets.serve(handle_connection, "0.0.0.0", PORT, max_size=50_000_000, ping_interval=20, ping_timeout=10):
+    async with websockets.serve(handle_connection, "0.0.0.0", PORT, max_size=50_000_000, ping_interval=20, ping_timeout=20):
         await asyncio.Future()
 
 if __name__ == "__main__":
