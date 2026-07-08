@@ -164,9 +164,15 @@ def get_rates(symbol, timeframe_str, count=200):
             buy_vol  = td["buy"]
             sell_vol = td["sell"]
             delta    = buy_vol - sell_vol
-            levels   = [
+            raw_levels = list(td["levels"].items())
+            if len(raw_levels) > 40:
+                # Keep the 40 highest-volume price levels rather than letting a long-lived bar
+                # (a 1d bar stays "current" for up to 24h) accumulate unbounded distinct levels.
+                raw_levels.sort(key=lambda x: x[1]["buy"] + x[1]["sell"], reverse=True)
+                raw_levels = raw_levels[:40]
+            levels = [
                 {"price": float(p), "buy": v["buy"], "sell": v["sell"]}
-                for p, v in sorted(td["levels"].items(), key=lambda x: float(x[0]))
+                for p, v in sorted(raw_levels, key=lambda x: float(x[0]))
             ]
         else:
             pr = float(r["high"]) - float(r["low"])
@@ -177,7 +183,12 @@ def get_rates(symbol, timeframe_str, count=200):
             sell_vol = total_vol - buy_vol
             delta    = buy_vol - sell_vol if isBull else -(sell_vol - buy_vol)
             step = get_price_step(symbol)
-            steps = max(4, int(pr / step)) if pr > 0 else 4
+            # Cap at 40 - the frontend already merges footprint rows down to ~20 per candle for
+            # display, so anything beyond that is wasted bandwidth. Without this cap, a wide-range
+            # bar (a full day's gold range can be $50-100) divided into ~$0.05 steps produced
+            # 1,000-2,000 levels for a SINGLE bar - across 100 bars that's what caused the 100+MB
+            # payloads and the resulting 1009 "message too big" disconnects.
+            steps = max(4, min(40, int(pr / step))) if pr > 0 else 4
             levels = []
             for i in range(steps + 1):
                 p = round(float(r["low"]) + (pr / steps) * i, digits) if steps > 0 else float(r["close"])
@@ -230,6 +241,15 @@ async def run():
     prev_ticks = {}
     bar_broadcast_time = {}
 
+    # Diagnostic wrapper: logs which message (symbol/tf/type) is unexpectedly huge, instead of
+    # silently hitting the 1009 "message too big" disconnect with no way to tell what caused it.
+    async def safe_send(ws, payload, label):
+        raw = json.dumps(payload)
+        size = len(raw)
+        if size > 2_000_000:
+            print(f"[SIZE WARNING] {label} is {size:,} bytes - investigate this payload")
+        await ws.send(raw)
+
     print(f"[RELAY] Connecting to {RELAY_URL} ...")
     print(f"[TICK] Real BUY/SELL classification: ENABLED")
 
@@ -247,12 +267,12 @@ async def run():
                     for tf in ["1m","5m","15m","1h","4h","1d"]:
                         rates = await fetch_rates(sym, tf, 100)
                         if rates:
-                            await ws.send(json.dumps({
+                            await safe_send(ws, {
                                 "type":   "history",
                                 "symbol": sym,
                                 "tf":     tf,
                                 "bars":   rates,
-                            }))
+                            }, f"initial history {sym}/{tf}")
                             await asyncio.sleep(0.02)
 
                 async def tick_loop():
@@ -286,12 +306,12 @@ async def run():
                                         for tf in ["1m","5m","15m","1h","4h","1d"]:
                                             rates = await fetch_rates(sym, tf, 5)
                                             if rates:
-                                                await ws.send(json.dumps({
+                                                await safe_send(ws, {
                                                     "type":   "bar_update",
                                                     "symbol": sym,
                                                     "tf":     tf,
                                                     "bars":   rates,
-                                                }))
+                                                }, f"bar_update {sym}/{tf}")
                         except Exception as e:
                             print(f"[TICK] Error: {e}")
                         await asyncio.sleep(TICK_INTERVAL)
@@ -305,14 +325,14 @@ async def run():
                                 tf  = msg.get("tf","15m")
                                 rates = await fetch_rates(sym, tf, 100)
                                 if rates:
-                                    await ws.send(json.dumps({
+                                    await safe_send(ws, {
                                         "type":   "history",
                                         "symbol": sym,
                                         "tf":     tf,
                                         "bars":   rates,
-                                    }))
-                        except Exception:
-                            pass
+                                    }, f"subscribe history {sym}/{tf}")
+                        except Exception as e:
+                            print(f"[RECV] Error: {e}")
 
                 await asyncio.gather(tick_loop(), recv_loop())
 
