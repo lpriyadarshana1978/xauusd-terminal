@@ -485,7 +485,24 @@ function handleMsg(msg){
   }
   if(msg.type==='bar_update'&&msg.symbol===currentSym&&msg.tf===currentTF){
     const ex=candles[currentTF];if(!ex?.length)return;
-    msg.bars.forEach(b=>{const i=ex.findIndex(c=>c.time===b.time);const u=sanitizeBar({...b,buyVol:b.buyVol||0,sellVol:b.sellVol||0,delta:b.delta||0,levels:b.levels||[],isWhale:(b.vol||0)>500});if(i>=0)ex[i]=u;else ex.push(u);});
+    const latestTime=ex[ex.length-1].time;
+    msg.bars.forEach(b=>{
+      const i=ex.findIndex(c=>c.time===b.time);
+      const u=sanitizeBar({...b,buyVol:b.buyVol||0,sellVol:b.sellVol||0,delta:b.delta||0,levels:b.levels||[],isWhale:(b.vol||0)>500});
+      if(i>=0){
+        if(b.time===latestTime){
+          ex[i]=u; // still-forming candle - always take the freshest data
+        }else{
+          // Already-closed candle: keep its footprint frozen as first displayed. The bridge
+          // recomputes footprint levels fresh from MT5 every broadcast, and MT5 can revise a
+          // just-closed bar's tick volume slightly as late ticks settle - without this, that
+          // showed up as already-complete candles' footprint numbers visibly changing later.
+          ex[i]={...u,levels:ex[i].levels,buyVol:ex[i].buyVol,sellVol:ex[i].sellVol,delta:ex[i].delta,isWhale:ex[i].isWhale,_fpCache:ex[i]._fpCache};
+        }
+      }else{
+        ex.push(u);
+      }
+    });
     ex.sort((a,b)=>a.time-b.time);
     cvdHist[currentTF]=[];let cc=0;ex.forEach(c=>{cc+=c.delta;cvdHist[currentTF].push(cc);});cvd=cc;
   }
@@ -598,22 +615,34 @@ function draw(){
     if(inds.fp&&c.levels?.length&&bw>8&&Math.abs(highY-lowY)>=14){
       const hw=Math.floor(bw/2)-1;
       const cH=Math.abs(highY-lowY);
-      // Limit levels to whatever actually fits in this candle's pixel height - no hard floor,
-      // otherwise a very short candle (extreme zoom, or a flat/quiet period) forces rows to
-      // render at their 14px minimum anyway and overflow way past the candle's own body.
-      let rawLevels=[...c.levels].sort((a,b)=>b.price-a.price);
-      const MAX_LEVELS=Math.max(1,Math.min(20,Math.floor(cH/14)));
-      if(rawLevels.length>MAX_LEVELS){
-        // Merge levels into groups
-        const grouped=[];
-        const groupSize=Math.ceil(rawLevels.length/MAX_LEVELS);
-        for(let g=0;g<rawLevels.length;g+=groupSize){
-          const grp=rawLevels.slice(g,g+groupSize);
-          grouped.push({price:grp[0].price,buy:grp.reduce((s,l)=>s+(l.buy||0),0),sell:grp.reduce((s,l)=>s+(l.sell||0),0)});
+      const isLive=cs&&c.time===cs[cs.length-1]?.time;
+      let sorted;
+      if(!isLive&&c._fpCache){
+        // Already-closed candle: reuse the grouping computed the first time it wasn't live,
+        // instead of recomputing from cH every frame. cH depends on the chart's overall price
+        // scale, which wobbles slightly on every live tick - without this cache, that wobble
+        // reshuffled how levels get merged and made closed candles' footprint numbers visibly
+        // shift even though the underlying (already-frozen) data never changed.
+        sorted=c._fpCache;
+      }else{
+        // Limit levels to whatever actually fits in this candle's pixel height - no hard floor,
+        // otherwise a very short candle (extreme zoom, or a flat/quiet period) forces rows to
+        // render at their 14px minimum anyway and overflow way past the candle's own body.
+        let rawLevels=[...c.levels].sort((a,b)=>b.price-a.price);
+        const MAX_LEVELS=Math.max(1,Math.min(20,Math.floor(cH/14)));
+        if(rawLevels.length>MAX_LEVELS){
+          // Merge levels into groups
+          const grouped=[];
+          const groupSize=Math.ceil(rawLevels.length/MAX_LEVELS);
+          for(let g=0;g<rawLevels.length;g+=groupSize){
+            const grp=rawLevels.slice(g,g+groupSize);
+            grouped.push({price:grp[0].price,buy:grp.reduce((s,l)=>s+(l.buy||0),0),sell:grp.reduce((s,l)=>s+(l.sell||0),0)});
+          }
+          rawLevels=grouped;
         }
-        rawLevels=grouped;
+        sorted=rawLevels;
+        if(!isLive)c._fpCache=sorted;
       }
-      const sorted=rawLevels;
       const rowH=Math.max(14,cH/Math.max(sorted.length,1));
       const maxVol=Math.max(1,...sorted.map(l=>Math.max(l.buy||0,l.sell||0)));
       // Find POC
