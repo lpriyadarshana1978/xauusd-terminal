@@ -64,6 +64,7 @@ body{display:flex;flex-direction:column;font-family:'Courier New',monospace;font
   <button class="indbtn" id="b-wyc" onclick="tog('wyc')" style="border-color:#00ccff;color:#00ccff;">WYC</button>
   <button class="indbtn" id="b-ew" onclick="tog('ew')" style="border-color:#ff44ff;color:#ff44ff;">EW</button>
   <button class="indbtn on" id="b-domliq" onclick="tog('domliq')" style="border-color:#00ffcc;color:#00ffcc;">DOM-LIQ</button>
+  <button class="indbtn on" id="b-dom1h" onclick="tog('dom1h')" style="border-color:#cc66ff;color:#cc66ff;" title="1-Hour Liquidity Profile (real buy/sell volume by price level)">DOM-1H</button>
   <div style="display:flex;gap:2px;margin-left:4px;">
     <button class="tfb" onclick="zoomIn()">+</button>
     <button class="tfb" onclick="zoomOut()">−</button>
@@ -201,12 +202,36 @@ const rint=(a,b)=>Math.floor(rnd(a,b));
 const $=id=>document.getElementById(id);
 const set=(id,v,c)=>{const e=$(id);if(e){e.textContent=v;if(c)e.style.color=c;}};
 
+// Price precision differs a lot by instrument (XAU ~2340.11, USDJPY ~150.123, EURUSD ~1.14023).
+// A single hardcoded .toFixed(2) makes forex majors show identical repeated numbers on the axis.
+function symDecimals(sym){
+  sym=sym||currentSym;
+  if(/JPY/i.test(sym))return 3;
+  if(/XAU|XAG/i.test(sym))return 2;
+  return 5; // EURUSD, GBPUSD, AUDUSD, USDCAD, USDCHF etc.
+}
+
+// Guards against a single corrupt/glitched bar (bad tick, unit mismatch from the bridge, etc.)
+// permanently blowing up the chart's price scale. Clamps any wick that implies an implausible
+// intrabar move (>5%, which no real forex/gold bar legitimately needs) back toward the body.
+function sanitizeBar(b){
+  let{open,high,low,close}=b;
+  if(![open,high,low,close].every(v=>typeof v==='number'&&isFinite(v)&&v>0))return b;
+  const ref=(open+close)/2;
+  if(!ref)return b;
+  const cap=ref*0.05;
+  const hiCap=Math.max(open,close)+cap,loCap=Math.min(open,close)-cap;
+  high=Math.min(high,hiCap);low=Math.max(low,loCap);
+  high=Math.max(high,open,close);low=Math.min(low,open,close);
+  return{...b,open,high,low,close};
+}
+
 // ── State ────────────────────────────────────────────
 let candles={},cvdHist={},domData=[],whaleAlerts=[];
 let cvd=0,vwapV=0,tick=0,openPrice=0;
 let currentSym='XAUUSDm',currentTF='15m';
 let mtfData={},mtfMode='bias';
-let inds={vwap:true,fp:true,fvg:true,liq:true,smc:true,whale:true,poc:true,bubble:true,crt:false,wyc:false,ew:false,domliq:true};
+let inds={vwap:true,fp:true,fvg:true,liq:true,smc:true,whale:true,poc:true,bubble:true,crt:false,wyc:false,ew:false,domliq:true,dom1h:true};
 let ws=null,wsLive=false,demoMode=false;
 let viewBars=6,viewOffset=0,yOffset=0,bubbleTick=0; // yOffset shifts price range up/down
 const MIN_BARS=2,MAX_BARS=120;
@@ -216,13 +241,22 @@ const MIN_BARS=2,MAX_BARS=120;
 let domLiqSnaps={};
 let _domLiqLast=0;
 let _domLiqGMax=500;
+// Rolling buffer of real 1-minute footprint bars for the current symbol, kept independent of
+// whatever timeframe is currently displayed, so the 1H liquidity profile always has a full
+// trailing hour of real buy/sell volume to aggregate regardless of the chart's own TF.
+let dom1hBars=[];
+function domStep(){const d2=symDecimals();return d2>=5?0.00015:d2===3?0.015:0.10;}
+function pruneDom1h(){const cutoff=Math.floor(Date.now()/1000)-4200;dom1hBars=dom1hBars.filter(b=>b.time>=cutoff);}
 function updateDomLiq(price){
   var now=Date.now();if(now-_domLiqLast<400)return;_domLiqLast=now;
   var cs2=candles[currentTF];if(!cs2||!cs2.length)return;
   var barTime=cs2[cs2.length-1].time||Math.floor(now/1000);
-  var step=0.10,levels=[];
+  // Step/rounding must scale with the instrument, same reasoning as genDOMDemo() above -
+  // a fixed $0.10 step made a ±35-level heatmap span ±$3.50 around a 1.14 EURUSD price (absurd).
+  var d2=symDecimals(),rf=Math.pow(10,d2);
+  var step=d2>=5?0.00015:d2===3?0.015:0.10,levels=[];
   for(var ii=-35;ii<=35;ii++){
-    var p=Math.round((price+ii*step)*100)/100,dist=Math.abs(ii);
+    var p=Math.round((price+ii*step)*rf)/rf,dist=Math.abs(ii);
     var base=Math.max(30,700-dist*16+Math.random()*250);
     var isFive=(p%5<0.1||p%5>4.9),isRound=(p%1<0.05||p%1>0.95),isHalf=(Math.abs(p%1-0.5)<0.05);
     var cluster=isFive?base*3.5:isRound?base*2.5:isHalf?base*1.6:base;
@@ -288,6 +322,54 @@ function drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP){
   }
 }
 
+// ── 1-Hour Liquidity Profile ──────────────────────────
+// Unlike the DOM-LIQ panel above (which is a simulated, time-based-per-candle visual), this
+// aggregates REAL buy/sell footprint volume already present in dom1hBars over a genuine
+// trailing 60-minute window, bucketed by price. It's a static profile bar along the right edge
+// that doesn't scroll with the candles - closer to a directional volume profile than a DOM ladder.
+function computeHourlyLevels(){
+  pruneDom1h();
+  const nowSec=Math.floor(Date.now()/1000),cutoff=nowSec-3600;
+  const bars=dom1hBars.filter(b=>b.time>=cutoff&&b.real!==false);
+  const step=domStep(),d2=symDecimals(),rf=Math.pow(10,d2);
+  const buckets={};
+  bars.forEach(b=>{
+    (b.levels||[]).forEach(lv=>{
+      const p=Math.round(Math.round(lv.price/step)*step*rf)/rf;
+      const key=p.toFixed(d2);
+      if(!buckets[key])buckets[key]={price:p,buy:0,sell:0};
+      buckets[key].buy+=lv.buy||0;
+      buckets[key].sell+=lv.sell||0;
+    });
+  });
+  return Object.values(buckets).sort((a,b)=>a.price-b.price);
+}
+function drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP){
+  const levels=computeHourlyLevels();
+  const visible=levels.filter(l=>l.price>=minP-1&&l.price<=maxP+1);
+  if(!visible.length)return;
+  const maxVol=Math.max.apply(null,visible.map(l=>l.buy+l.sell))||1;
+  const barMaxW=90,step=domStep();
+  visible.forEach(l=>{
+    const y=py(l.price),total=l.buy+l.sell;if(total<=0)return;
+    const w=Math.max(2,(total/maxVol)*barMaxW);
+    const buyPct=l.buy/total;
+    const bandH=Math.max(2,Math.abs(py(l.price)-py(l.price+step))-1);
+    const buyW=w*buyPct;
+    ctx.fillStyle='rgba(0,230,118,'+(0.35+buyPct*0.4).toFixed(2)+')';
+    ctx.fillRect(cw-P.r-w,y-bandH/2,buyW,bandH);
+    ctx.fillStyle='rgba(244,67,54,'+(0.35+(1-buyPct)*0.4).toFixed(2)+')';
+    ctx.fillRect(cw-P.r-w+buyW,y-bandH/2,w-buyW,bandH);
+  });
+  ctx.fillStyle='#cc66ffcc';ctx.font='bold 9px monospace';ctx.textAlign='right';
+  ctx.fillText('1H Liquidity (real)',cw-P.r-4,P.t+12);
+  const tB=visible.reduce((s,l)=>s+l.buy,0),tA=visible.reduce((s,l)=>s+l.sell,0),tT=tB+tA||1;
+  ctx.font='8px monospace';ctx.fillStyle='#00e676cc';ctx.textAlign='right';
+  ctx.fillText('BUY '+(tB/1000).toFixed(1)+'K ('+Math.round(tB/tT*100)+'%)',cw-P.r-4,P.t+23);
+  ctx.fillStyle='#f44336cc';
+  ctx.fillText('SELL '+(tA/1000).toFixed(1)+'K ('+Math.round(tA/tT*100)+'%)',cw-P.r-4,P.t+33);
+}
+
 // ── Demo data ─────────────────────────────────────────
 function demoCandle(prev){
   const base=prev?prev.close:2341.45;
@@ -323,11 +405,17 @@ function initDemo(){
 }
 
 function genDOMDemo(mid){
-  domData=[];const sp=0.35;
-  for(let i=8;i>=1;i--)domData.push({price:+(mid+sp/2+i*0.15).toFixed(2),vol:rint(50,900),side:'ask'});
-  domData.push({price:+(mid+sp/2).toFixed(2),vol:rint(300,1400),side:'ask',best:true});
-  domData.push({price:+(mid-sp/2).toFixed(2),vol:rint(300,1400),side:'bid',best:true});
-  for(let i=1;i<=8;i++)domData.push({price:+(mid-sp/2-i*0.15).toFixed(2),vol:rint(50,900),side:'bid'});
+  domData=[];
+  // Step size must scale with the instrument: gold moves in ~$0.10-0.15 increments,
+  // a JPY pair in ~0.01-0.03, and majors like EURUSD in ~0.0001-0.0003. A single hardcoded
+  // step made every non-gold pair show a comically wide, unrealistic bid/ask spread.
+  const d2=symDecimals();
+  const step=d2>=5?0.00015:d2===3?0.015:0.15;
+  const sp=step*2.3;
+  for(let i=8;i>=1;i--)domData.push({price:+(mid+sp/2+i*step).toFixed(d2),vol:rint(50,900),side:'ask'});
+  domData.push({price:+(mid+sp/2).toFixed(d2),vol:rint(300,1400),side:'ask',best:true});
+  domData.push({price:+(mid-sp/2).toFixed(d2),vol:rint(300,1400),side:'bid',best:true});
+  for(let i=1;i<=8;i++)domData.push({price:+(mid-sp/2-i*step).toFixed(d2),vol:rint(50,900),side:'bid'});
 }
 
 // ── WebSocket ─────────────────────────────────────────
@@ -355,31 +443,54 @@ function connectWS(){
 function handleMsg(msg){
   if(msg.type==='tick'&&msg.symbol===currentSym){
     const p=msg.bid;
-    $('lp').textContent=p.toFixed(2);
+    $('lp').textContent=p.toFixed(symDecimals());
     $('lp').style.color=msg.side==='buy'?'#00e676':'#f44336';
     const chg=p-openPrice,pct=(chg/openPrice*100).toFixed(2);
-    $('pc').textContent=(chg>=0?'+':'')+chg.toFixed(2)+' ('+(chg>=0?'+':'')+pct+'%)';
+    $('pc').textContent=(chg>=0?'+':'')+chg.toFixed(symDecimals())+' ('+(chg>=0?'+':'')+pct+'%)';
     $('pc').className='pchg '+(chg>=0?'pos':'neg');
     set('sv-spread',msg.spread,'#aaa');
     genDOMDemo(p);
     if(inds.domliq)updateDomLiq(p);
     const cs=candles[currentTF];
-    if(cs?.length){const last=cs[cs.length-1];last.close=p;last.high=Math.max(last.high,p);last.low=Math.min(last.low,p);if(msg.side==='buy'){last.buyVol++;last.delta++;}else{last.sellVol++;last.delta--;}}
+    if(cs?.length){
+      const last=cs[cs.length-1];
+      const ref=last.close||last.open||p;
+      // Reject an implausible >5% tick jump rather than let it permanently distort this candle's high/low
+      if(!ref||Math.abs(p-ref)/ref<=0.05){
+        last.close=p;last.high=Math.max(last.high,p);last.low=Math.min(last.low,p);
+        if(msg.side==='buy'){last.buyVol++;last.delta++;}else{last.sellVol++;last.delta--;}
+      }
+    }
     TFS.forEach(tf=>{if(mtfData[tf]){const d=mtfData[tf];['bias','delta','mom'].forEach(k=>{d[k]=Math.max(-1,Math.min(1,d[k]+rnd(-0.05,0.05)));});}});
     if(Math.random()<0.03){whaleAlerts.unshift({side:Math.random()>0.5?'BUY':'SELL',vol:rint(2000,5000),price:p});if(whaleAlerts.length>8)whaleAlerts.pop();}
   }
   if(msg.type==='history'&&msg.symbol===currentSym&&msg.tf===currentTF){
     demoMode=false;
-    candles[currentTF]=msg.bars.map(b=>({...b,buyVol:b.buyVol||0,sellVol:b.sellVol||0,delta:b.delta||0,levels:b.levels||[],isWhale:(b.vol||0)>500}));
+    candles[currentTF]=msg.bars.map(b=>sanitizeBar({...b,buyVol:b.buyVol||0,sellVol:b.sellVol||0,delta:b.delta||0,levels:b.levels||[],isWhale:(b.vol||0)>500}));
     cvdHist[currentTF]=[];let cc=0;
     candles[currentTF].forEach(c=>{cc+=c.delta;cvdHist[currentTF].push(cc);});
     cvd=cc;openPrice=candles[currentTF][0]?.open||2341;
   }
   if(msg.type==='bar_update'&&msg.symbol===currentSym&&msg.tf===currentTF){
     const ex=candles[currentTF];if(!ex?.length)return;
-    msg.bars.forEach(b=>{const i=ex.findIndex(c=>c.time===b.time);const u={...b,buyVol:b.buyVol||0,sellVol:b.sellVol||0,delta:b.delta||0,levels:b.levels||[],isWhale:(b.vol||0)>500};if(i>=0)ex[i]=u;else ex.push(u);});
+    msg.bars.forEach(b=>{const i=ex.findIndex(c=>c.time===b.time);const u=sanitizeBar({...b,buyVol:b.buyVol||0,sellVol:b.sellVol||0,delta:b.delta||0,levels:b.levels||[],isWhale:(b.vol||0)>500});if(i>=0)ex[i]=u;else ex.push(u);});
     ex.sort((a,b)=>a.time-b.time);
     cvdHist[currentTF]=[];let cc=0;ex.forEach(c=>{cc+=c.delta;cvdHist[currentTF].push(cc);});cvd=cc;
+  }
+  // Captured independent of currentTF/currentSym-display so the 1H liquidity profile always has
+  // a full trailing hour of real per-price buy/sell volume, whichever timeframe is on screen.
+  if(msg.type==='history'&&msg.symbol===currentSym&&msg.tf==='1m'){
+    dom1hBars=msg.bars.map(b=>sanitizeBar({...b,levels:b.levels||[]}));
+    pruneDom1h();
+  }
+  if(msg.type==='bar_update'&&msg.symbol===currentSym&&msg.tf==='1m'){
+    msg.bars.forEach(b=>{
+      const i=dom1hBars.findIndex(c=>c.time===b.time);
+      const u=sanitizeBar({...b,levels:b.levels||[]});
+      if(i>=0)dom1hBars[i]=u;else dom1hBars.push(u);
+    });
+    dom1hBars.sort((a,b)=>a.time-b.time);
+    pruneDom1h();
   }
 }
 
@@ -442,10 +553,11 @@ function draw(){
   const pools=inds.liq?detectLiq(vc):[];
 
   if(inds.domliq){try{drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP);}catch(e){}}
+  if(inds.dom1h){try{drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP);}catch(e){}}
 
   // Grid
   ctx.strokeStyle=_t.gridLine;ctx.lineWidth=0.5;
-  for(let i=0;i<=5;i++){const p=minP+(pr/5)*i,y=py(p);ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(cw-P.r,y);ctx.stroke();ctx.fillStyle='#444';ctx.font='9px monospace';ctx.textAlign='left';ctx.fillText(p.toFixed(2),cw-P.r+2,y+3);}
+  for(let i=0;i<=5;i++){const p=minP+(pr/5)*i,y=py(p);ctx.beginPath();ctx.moveTo(P.l,y);ctx.lineTo(cw-P.r,y);ctx.stroke();ctx.fillStyle='#444';ctx.font='9px monospace';ctx.textAlign='left';ctx.fillText(p.toFixed(symDecimals()),cw-P.r+2,y+3);}
 
   // FVG
   if(inds.fvg)fvgs.forEach(f=>{const x=P.l+f.i*(pw/vn),y1=py(f.top),y2=py(f.bot);ctx.fillStyle=f.type==='bull'?'#00e67615':'#f4433615';ctx.fillRect(x,Math.min(y1,y2),pw-f.i*(pw/vn),Math.abs(y2-y1));ctx.fillStyle=f.type==='bull'?'#00e67688':'#f4433688';ctx.font='bold 7px monospace';ctx.textAlign='left';ctx.fillText('FVG',x+2,Math.min(y1,y2)+8);});
@@ -457,7 +569,7 @@ function draw(){
   if(inds.smc)smcZ.slice(-5).forEach(s=>{const y=py(s.price),x=P.l+s.i*(pw/vn);ctx.strokeStyle=s.dir==='bull'?'#a0a0ff66':'#ff888866';ctx.lineWidth=1;ctx.setLineDash([4,2]);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(cw-P.r,y);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=s.dir==='bull'?'#a0a0ff':'#ff8888';ctx.font='bold 8px monospace';ctx.textAlign='left';ctx.fillText(s.type,x+1,y-2);});
 
   // VWAP line
-  if(inds.vwap&&vwapV){const vy=py(vwapV);ctx.strokeStyle='#ff9900cc';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(P.l,vy);ctx.lineTo(cw-P.r,vy);ctx.stroke();ctx.fillStyle='#ff9900';ctx.font='bold 9px monospace';ctx.textAlign='left';ctx.fillText('VWAP '+vwapV.toFixed(2),cw-P.r+2,vy-2);}
+  if(inds.vwap&&vwapV){const vy=py(vwapV);ctx.strokeStyle='#ff9900cc';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(P.l,vy);ctx.lineTo(cw-P.r,vy);ctx.stroke();ctx.fillStyle='#ff9900';ctx.font='bold 9px monospace';ctx.textAlign='left';ctx.fillText('VWAP '+vwapV.toFixed(symDecimals()),cw-P.r+2,vy-2);}
 
   // Candles
   vc.forEach((c,i)=>{
@@ -756,12 +868,12 @@ function renderDOM(){
   const maxV=Math.max(...domData.map(d=>d.vol));
   let h='';
   domData.forEach(d=>{const pct=d.vol/maxV,isA=d.side==='ask',col=isA?'#f44336':'#00e676';
-  h+=`<div class="dom-row"><div style="position:absolute;${isA?'right':'left'}:0;top:1px;bottom:1px;width:${(pct*55).toFixed(0)}%;background:${col};opacity:0.25;"></div><div style="font-size:9px;color:${col};z-index:1;min-width:28px;text-align:right;">${d.vol}</div><div style="flex:1;text-align:center;font-size:${d.best?'11':'9'}px;font-weight:${d.best?'bold':'normal'};color:${d.best?'#fff':'#555'};z-index:1;">${d.price.toFixed(2)}</div></div>`;});
+  h+=`<div class="dom-row"><div style="position:absolute;${isA?'right':'left'}:0;top:1px;bottom:1px;width:${(pct*55).toFixed(0)}%;background:${col};opacity:0.25;"></div><div style="font-size:9px;color:${col};z-index:1;min-width:28px;text-align:right;">${d.vol}</div><div style="flex:1;text-align:center;font-size:${d.best?'11':'9'}px;font-weight:${d.best?'bold':'normal'};color:${d.best?'#fff':'#555'};z-index:1;">${d.price.toFixed(symDecimals())}</div></div>`;});
   list.innerHTML=h;
   const ba=domData.find(d=>d.side==='ask'&&d.best),bb=domData.find(d=>d.side==='bid'&&d.best);
-  if(ba)$('domAsk').textContent='ASK  '+ba.price.toFixed(2);
-  if(bb)$('domBid').textContent='BID  '+bb.price.toFixed(2);
-  if(ba&&bb)set('sv-spread',(ba.price-bb.price).toFixed(2),'#aaa');
+  if(ba)$('domAsk').textContent='ASK  '+ba.price.toFixed(symDecimals());
+  if(bb)$('domBid').textContent='BID  '+bb.price.toFixed(symDecimals());
+  if(ba&&bb)set('sv-spread',(ba.price-bb.price).toFixed(symDecimals()),'#aaa');
 }
 
 // ── Whale alerts ──────────────────────────────────────
@@ -797,7 +909,7 @@ function updateStats(){
   if(last.delta!==undefined)set('sv-delta',(last.delta>0?'+':'')+last.delta,last.delta>=0?'#00e676':'#f44336');
   const cv=cvdHist[currentTF];const cvdL=cv?cv[cv.length-1]:0;
   set('sv-cvd',(cvdL>0?'+':'')+Math.round(cvdL),cvdL>=0?'#00e676':'#f44336');
-  set('sv-vwap',vwapV.toFixed(2));
+  set('sv-vwap',vwapV.toFixed(symDecimals()));
   if(last.buyVol&&last.sellVol){const im=((last.buyVol/(last.buyVol+last.sellVol))*100).toFixed(0);set('sv-imb',im+'%',im>55?'#00e676':im<45?'#f44336':'#aaa');}
 }
 
@@ -812,9 +924,9 @@ function demoUpdate(){
   const hist=cvdHist[currentTF]||(cvdHist[currentTF]=[]);
   cvd+=nb-ns;if(hist.length)hist[hist.length-1]=cvd;
   const p=last.close;
-  $('lp').textContent=p.toFixed(2);$('lp').style.color=move>=0?'#00e676':'#f44336';
+  $('lp').textContent=p.toFixed(symDecimals());$('lp').style.color=move>=0?'#00e676':'#f44336';
   const chg=p-openPrice,pct=(chg/(openPrice||2341)*100).toFixed(2);
-  $('pc').textContent=(chg>=0?'+':'')+chg.toFixed(2)+' ('+(chg>=0?'+':'')+pct+'%)';
+  $('pc').textContent=(chg>=0?'+':'')+chg.toFixed(symDecimals())+' ('+(chg>=0?'+':'')+pct+'%)';
   $('pc').className='pchg '+(chg>=0?'pos':'neg');
   genDOMDemo(p);
   TFS.forEach(tf=>{if(mtfData[tf]){const d=mtfData[tf];['bias','delta','mom'].forEach(k=>{d[k]=Math.max(-1,Math.min(1,d[k]+rnd(-0.08,0.08)));});}});
@@ -822,6 +934,22 @@ function demoUpdate(){
 
 // ── Controls ──────────────────────────────────────────
 window.setTF=function(tf){currentTF=tf;yOffset=0;document.querySelectorAll('.tfb').forEach(b=>{b.className='tfb'+(b.textContent===tf?' on':'');});if(wsLive&&ws)ws.send(JSON.stringify({type:'subscribe',symbol:currentSym,tf}));if(!candles[tf]?.length&&demoMode){candles[tf]=[];cvdHist[tf]=[];let cc=0;for(let i=0;i<20;i++){const c=demoCandle(candles[tf][candles[tf].length-1]);cc+=c.delta;c.cvd=cc;candles[tf].push(c);cvdHist[tf].push(cc);}}};
+
+window.changeSym=function(sym){
+  if(sym===currentSym)return;
+  currentSym=sym;
+  // wipe all per-symbol state so the old symbol's candles/levels never bleed into the new chart
+  candles={};cvdHist={};cvd=0;whaleAlerts=[];domLiqSnaps={};mtfData={};domData=[];dom1hBars=[];
+  viewOffset=0;yOffset=0;openPrice=0;
+  set('lp','——');
+  const pcEl=$('pc');if(pcEl){pcEl.textContent='connecting...';pcEl.className='pchg';pcEl.style.color='#555';}
+  document.querySelectorAll('.tfb').forEach(b=>{b.className='tfb'+(b.textContent===currentTF?' on':'');});
+  if(wsLive&&ws&&ws.readyState===1){
+    ws.send(JSON.stringify({type:'subscribe',symbol:currentSym,tf:currentTF}));
+  }else{
+    initDemo();
+  }
+};
 window.tog=function(k){inds[k]=!inds[k];const b=$('b-'+k);if(b)b.className='indbtn'+(inds[k]?' on':'');};
 window.setMM=function(m){mtfMode=m;['bias','delta','vol','mom'].forEach(k=>{const b=$('mm-'+k);if(b)b.className='indbtn'+(k===m?' on':'');});};
 window.zoomIn=function(){viewBars=Math.max(MIN_BARS,Math.round(viewBars*0.75));clampOff();};
