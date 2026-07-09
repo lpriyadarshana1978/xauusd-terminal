@@ -325,8 +325,8 @@ function drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP){
 // ── 1-Hour Liquidity Profile ──────────────────────────
 // Unlike the DOM-LIQ panel above (which is a simulated, time-based-per-candle visual), this
 // aggregates REAL buy/sell footprint volume already present in dom1hBars over a genuine
-// trailing 60-minute window, bucketed by price. It's a static profile bar along the right edge
-// that doesn't scroll with the candles - closer to a directional volume profile than a DOM ladder.
+// trailing 60-minute window, bucketed by price, and renders it as full-width heat bands
+// (blue->green->yellow->red by concentration) spanning the whole chart width.
 function computeHourlyLevels(){
   pruneDom1h();
   const nowSec=Math.floor(Date.now()/1000),cutoff=nowSec-3600;
@@ -344,30 +344,35 @@ function computeHourlyLevels(){
   });
   return Object.values(buckets).sort((a,b)=>a.price-b.price);
 }
-function drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP){
+function drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi){
   const levels=computeHourlyLevels();
-  const visible=levels.filter(l=>l.price>=minP-1&&l.price<=maxP+1);
+  if(!levels.length)return;
+  // Only draw liquidity that sits OUTSIDE the currently traded candle range - that space is
+  // reserved (see the dom1h margin expansion in draw()) and nothing else paints there, so the
+  // bands render clean and bold instead of being buried under opaque footprint boxes.
+  const visible=levels.filter(l=>(l.price>tradedHi||l.price<tradedLo)&&l.price>=minP-1&&l.price<=maxP+1);
   if(!visible.length)return;
   const maxVol=Math.max.apply(null,visible.map(l=>l.buy+l.sell))||1;
-  const barMaxW=90,step=domStep();
+  const step=domStep();
   visible.forEach(l=>{
     const y=py(l.price),total=l.buy+l.sell;if(total<=0)return;
-    const w=Math.max(2,(total/maxVol)*barMaxW);
-    const buyPct=l.buy/total;
-    const bandH=Math.max(2,Math.abs(py(l.price)-py(l.price+step))-1);
-    const buyW=w*buyPct;
-    ctx.fillStyle='rgba(0,230,118,'+(0.35+buyPct*0.4).toFixed(2)+')';
-    ctx.fillRect(cw-P.r-w,y-bandH/2,buyW,bandH);
-    ctx.fillStyle='rgba(244,67,54,'+(0.35+(1-buyPct)*0.4).toFixed(2)+')';
-    ctx.fillRect(cw-P.r-w+buyW,y-bandH/2,w-buyW,bandH);
+    const t=Math.min(1,total/maxVol);
+    const bandH=Math.max(3,Math.abs(py(l.price)-py(l.price+step))+1);
+    // Heat scale: dim blue (low) -> teal/green (medium) -> yellow -> red (highest concentration).
+    let r,g,b;
+    if(t<0.33){const tt=t/0.33;r=20+tt*20;g=70+tt*150;b=170-tt*90;}
+    else if(t<0.66){const tt=(t-0.33)/0.33;r=40+tt*180;g=220-tt*15;b=80-tt*60;}
+    else{const tt=(t-0.66)/0.34;r=220+tt*35;g=205-tt*160;b=20;}
+    ctx.fillStyle='rgba('+Math.floor(r)+','+Math.floor(g)+','+Math.floor(b)+','+(0.45+t*0.5).toFixed(2)+')';
+    ctx.fillRect(P.l,y-bandH/2,pw,bandH);
   });
-  ctx.fillStyle='#cc66ffcc';ctx.font='bold 9px monospace';ctx.textAlign='right';
-  ctx.fillText('1H Liquidity (real)',cw-P.r-4,P.t+12);
+  ctx.fillStyle='#ffffffdd';ctx.font='bold 9px monospace';ctx.textAlign='left';
+  ctx.fillText('1H Liquidity (real)',P.l+4,P.t+12);
   const tB=visible.reduce((s,l)=>s+l.buy,0),tA=visible.reduce((s,l)=>s+l.sell,0),tT=tB+tA||1;
-  ctx.font='8px monospace';ctx.fillStyle='#00e676cc';ctx.textAlign='right';
-  ctx.fillText('BUY '+(tB/1000).toFixed(1)+'K ('+Math.round(tB/tT*100)+'%)',cw-P.r-4,P.t+23);
+  ctx.font='8px monospace';ctx.fillStyle='#00e676cc';ctx.textAlign='left';
+  ctx.fillText('BUY '+(tB/1000).toFixed(1)+'K ('+Math.round(tB/tT*100)+'%)',P.l+4,P.t+24);
   ctx.fillStyle='#f44336cc';
-  ctx.fillText('SELL '+(tA/1000).toFixed(1)+'K ('+Math.round(tA/tT*100)+'%)',cw-P.r-4,P.t+33);
+  ctx.fillText('SELL '+(tA/1000).toFixed(1)+'K ('+Math.round(tA/tT*100)+'%)',P.l+4,P.t+35);
 }
 
 // ── Demo data ─────────────────────────────────────────
@@ -541,9 +546,13 @@ function draw(){
 
   let minP=Infinity,maxP=-Infinity;
   vc.forEach(c=>{if(c.low<minP)minP=c.low;if(c.high>maxP)maxP=c.high;});
+  const tradedLo=minP,tradedHi=maxP; // actual candle range, before axis padding below - the 1H
+                                      // heatmap must stay outside this so it never collides with
+                                      // the footprint boxes drawn over the candles themselves.
   const range=maxP-minP||1;
   minP-=range*0.01+yOffset*range*0.05;
   maxP+=range*0.13-yOffset*range*0.05;
+  if(inds.dom1h){minP-=range*0.16;maxP+=range*0.16;} // reserve clear top/bottom bands for it
   const pr=maxP-minP;
   const py=p=>P.t+ph*(1-(p-minP)/pr);
 
@@ -553,7 +562,7 @@ function draw(){
   const pools=inds.liq?detectLiq(vc):[];
 
   if(inds.domliq){try{drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP);}catch(e){}}
-  if(inds.dom1h){try{drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP);}catch(e){}}
+  if(inds.dom1h){try{drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi);}catch(e){}}
 
   // Grid
   ctx.strokeStyle=_t.gridLine;ctx.lineWidth=0.5;
