@@ -265,7 +265,7 @@ async def run():
                 # Send initial history with full footprint data
                 for sym in SYMBOLS:
                     for tf in ["1m","5m","15m","1h","4h","1d"]:
-                        rates = await fetch_rates(sym, tf, 100)
+                        rates = await fetch_rates(sym, tf, 300)
                         if rates:
                             await safe_send(ws, {
                                 "type":   "history",
@@ -323,7 +323,7 @@ async def run():
                             if msg.get("type") == "subscribe":
                                 sym = msg.get("symbol","XAUUSDm")
                                 tf  = msg.get("tf","15m")
-                                rates = await fetch_rates(sym, tf, 100)
+                                rates = await fetch_rates(sym, tf, 300)
                                 if rates:
                                     await safe_send(ws, {
                                         "type":   "history",
