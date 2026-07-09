@@ -351,21 +351,21 @@ function drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi){
   // price) rather than a per-price-level heat map. Intensity still reflects real accumulated
   // 1-hour volume: more real data means a bolder, more opaque band; almost none yet (e.g. right
   // after restarting the bridge) fades it down instead of showing a fully-saturated fake reading.
-  const intensity=Math.max(0.15,Math.min(1,tT/4000));
+  const intensity=Math.max(0.65,Math.min(1,tT/3000));
   const topBandBot=py(tradedHi),botBandTop=py(tradedLo);
   if(topBandBot>P.t+2){
     const g=ctx.createLinearGradient(0,P.t,0,topBandBot);
-    g.addColorStop(0,'rgba(255,221,0,'+(0.55*intensity).toFixed(2)+')');
-    g.addColorStop(0.5,'rgba(0,200,120,'+(0.45*intensity).toFixed(2)+')');
-    g.addColorStop(1,'rgba(20,40,90,'+(0.35*intensity).toFixed(2)+')');
+    g.addColorStop(0,'rgba(255,221,0,'+(0.8*intensity).toFixed(2)+')');
+    g.addColorStop(0.5,'rgba(0,200,120,'+(0.7*intensity).toFixed(2)+')');
+    g.addColorStop(1,'rgba(20,40,90,'+(0.6*intensity).toFixed(2)+')');
     ctx.fillStyle=g;ctx.fillRect(P.l,P.t,pw,topBandBot-P.t);
   }
   const chartBot=P.t+ph;
   if(botBandTop<chartBot-2){
     const g2=ctx.createLinearGradient(0,botBandTop,0,chartBot);
-    g2.addColorStop(0,'rgba(20,40,90,'+(0.35*intensity).toFixed(2)+')');
-    g2.addColorStop(0.5,'rgba(0,200,120,'+(0.45*intensity).toFixed(2)+')');
-    g2.addColorStop(1,'rgba(255,221,0,'+(0.55*intensity).toFixed(2)+')');
+    g2.addColorStop(0,'rgba(20,40,90,'+(0.6*intensity).toFixed(2)+')');
+    g2.addColorStop(0.5,'rgba(0,200,120,'+(0.7*intensity).toFixed(2)+')');
+    g2.addColorStop(1,'rgba(255,221,0,'+(0.8*intensity).toFixed(2)+')');
     ctx.fillStyle=g2;ctx.fillRect(P.l,botBandTop,pw,chartBot-botBandTop);
   }
   ctx.fillStyle='#ffffffee';ctx.font='bold 9px monospace';ctx.textAlign='left';
