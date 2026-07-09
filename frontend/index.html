@@ -63,7 +63,7 @@ body{display:flex;flex-direction:column;font-family:'Courier New',monospace;font
   <button class="indbtn" id="b-crt" onclick="tog('crt')" style="border-color:#ff9900;color:#ff9900;">CRT</button>
   <button class="indbtn" id="b-wyc" onclick="tog('wyc')" style="border-color:#00ccff;color:#00ccff;">WYC</button>
   <button class="indbtn" id="b-ew" onclick="tog('ew')" style="border-color:#ff44ff;color:#ff44ff;">EW</button>
-  <button class="indbtn on" id="b-domliq" onclick="tog('domliq')" style="border-color:#00ffcc;color:#00ffcc;">DOM-LIQ</button>
+  <button class="indbtn" id="b-domliq" onclick="tog('domliq')" style="border-color:#00ffcc;color:#00ffcc;">DOM-LIQ</button>
   <button class="indbtn on" id="b-dom1h" onclick="tog('dom1h')" style="border-color:#cc66ff;color:#cc66ff;" title="1-Hour Liquidity Profile (real buy/sell volume by price level)">DOM-1H</button>
   <div style="display:flex;gap:2px;margin-left:4px;">
     <button class="tfb" onclick="zoomIn()">+</button>
@@ -231,7 +231,7 @@ let candles={},cvdHist={},domData=[],whaleAlerts=[];
 let cvd=0,vwapV=0,tick=0,openPrice=0;
 let currentSym='XAUUSDm',currentTF='15m';
 let mtfData={},mtfMode='bias';
-let inds={vwap:true,fp:true,fvg:true,liq:true,smc:true,whale:true,poc:true,bubble:true,crt:false,wyc:false,ew:false,domliq:true,dom1h:true};
+let inds={vwap:true,fp:true,fvg:true,liq:true,smc:true,whale:true,poc:true,bubble:true,crt:false,wyc:false,ew:false,domliq:false,dom1h:true};
 let ws=null,wsLive=false,demoMode=false;
 let viewBars=6,viewOffset=0,yOffset=0,bubbleTick=0; // yOffset shifts price range up/down
 const MIN_BARS=2,MAX_BARS=120;
@@ -346,33 +346,40 @@ function computeHourlyLevels(){
 }
 function drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi){
   const levels=computeHourlyLevels();
-  if(!levels.length)return;
-  // Only draw liquidity that sits OUTSIDE the currently traded candle range - that space is
-  // reserved (see the dom1h margin expansion in draw()) and nothing else paints there, so the
-  // bands render clean and bold instead of being buried under opaque footprint boxes.
-  const visible=levels.filter(l=>(l.price>tradedHi||l.price<tradedLo)&&l.price>=minP-1&&l.price<=maxP+1);
-  if(!visible.length)return;
-  const maxVol=Math.max.apply(null,visible.map(l=>l.buy+l.sell))||1;
-  const step=domStep();
-  visible.forEach(l=>{
-    const y=py(l.price),total=l.buy+l.sell;if(total<=0)return;
-    const t=Math.min(1,total/maxVol);
-    const bandH=Math.max(3,Math.abs(py(l.price)-py(l.price+step))+1);
-    // Heat scale: dim blue (low) -> teal/green (medium) -> yellow -> red (highest concentration).
-    let r,g,b;
-    if(t<0.33){const tt=t/0.33;r=20+tt*20;g=70+tt*150;b=170-tt*90;}
-    else if(t<0.66){const tt=(t-0.33)/0.33;r=40+tt*180;g=220-tt*15;b=80-tt*60;}
-    else{const tt=(t-0.66)/0.34;r=220+tt*35;g=205-tt*160;b=20;}
-    ctx.fillStyle='rgba('+Math.floor(r)+','+Math.floor(g)+','+Math.floor(b)+','+(0.45+t*0.5).toFixed(2)+')';
-    ctx.fillRect(P.l,y-bandH/2,pw,bandH);
-  });
-  ctx.fillStyle='#ffffffdd';ctx.font='bold 9px monospace';ctx.textAlign='left';
+  const tB=levels.reduce((s,l)=>s+l.buy,0),tA=levels.reduce((s,l)=>s+l.sell,0),tT=tB+tA;
+  // Reference-style smooth gradient wash (yellow at the outer edge -> green -> dark navy near
+  // price) rather than a per-price-level heat map. Intensity still reflects real accumulated
+  // 1-hour volume: more real data means a bolder, more opaque band; almost none yet (e.g. right
+  // after restarting the bridge) fades it down instead of showing a fully-saturated fake reading.
+  const intensity=Math.max(0.15,Math.min(1,tT/4000));
+  const topBandBot=py(tradedHi),botBandTop=py(tradedLo);
+  if(topBandBot>P.t+2){
+    const g=ctx.createLinearGradient(0,P.t,0,topBandBot);
+    g.addColorStop(0,'rgba(255,221,0,'+(0.55*intensity).toFixed(2)+')');
+    g.addColorStop(0.5,'rgba(0,200,120,'+(0.45*intensity).toFixed(2)+')');
+    g.addColorStop(1,'rgba(20,40,90,'+(0.35*intensity).toFixed(2)+')');
+    ctx.fillStyle=g;ctx.fillRect(P.l,P.t,pw,topBandBot-P.t);
+  }
+  const chartBot=P.t+ph;
+  if(botBandTop<chartBot-2){
+    const g2=ctx.createLinearGradient(0,botBandTop,0,chartBot);
+    g2.addColorStop(0,'rgba(20,40,90,'+(0.35*intensity).toFixed(2)+')');
+    g2.addColorStop(0.5,'rgba(0,200,120,'+(0.45*intensity).toFixed(2)+')');
+    g2.addColorStop(1,'rgba(255,221,0,'+(0.55*intensity).toFixed(2)+')');
+    ctx.fillStyle=g2;ctx.fillRect(P.l,botBandTop,pw,chartBot-botBandTop);
+  }
+  ctx.fillStyle='#ffffffee';ctx.font='bold 9px monospace';ctx.textAlign='left';
   ctx.fillText('1H Liquidity (real)',P.l+4,P.t+12);
-  const tB=visible.reduce((s,l)=>s+l.buy,0),tA=visible.reduce((s,l)=>s+l.sell,0),tT=tB+tA||1;
-  ctx.font='8px monospace';ctx.fillStyle='#00e676cc';ctx.textAlign='left';
-  ctx.fillText('BUY '+(tB/1000).toFixed(1)+'K ('+Math.round(tB/tT*100)+'%)',P.l+4,P.t+24);
-  ctx.fillStyle='#f44336cc';
-  ctx.fillText('SELL '+(tA/1000).toFixed(1)+'K ('+Math.round(tA/tT*100)+'%)',P.l+4,P.t+35);
+  ctx.textAlign='right';
+  ctx.fillText('LIQ: '+(tB/1000).toFixed(1)+'K',cw-P.r-4,P.t+12);
+  ctx.textAlign='left';
+  ctx.fillText('LIQ: '+(tA/1000).toFixed(1)+'K',P.l+4,chartBot-4);
+  if(tT>0){
+    ctx.font='8px monospace';ctx.fillStyle='#00e676cc';ctx.textAlign='left';
+    ctx.fillText('BUY '+(tB/1000).toFixed(1)+'K ('+Math.round(tB/tT*100)+'%)',P.l+4,P.t+24);
+    ctx.fillStyle='#f44336cc';
+    ctx.fillText('SELL '+(tA/1000).toFixed(1)+'K ('+Math.round(tA/tT*100)+'%)',P.l+4,P.t+35);
+  }
 }
 
 // ── Demo data ─────────────────────────────────────────
@@ -552,7 +559,7 @@ function draw(){
   const range=maxP-minP||1;
   minP-=range*0.01+yOffset*range*0.05;
   maxP+=range*0.13-yOffset*range*0.05;
-  if(inds.dom1h){minP-=range*0.16;maxP+=range*0.16;} // reserve clear top/bottom bands for it
+  if(inds.dom1h){minP-=range*0.08;maxP+=range*0.06;} // reserve top/bottom bands for it, modestly
   const pr=maxP-minP;
   const py=p=>P.t+ph*(1-(p-minP)/pr);
 
@@ -588,12 +595,14 @@ function draw(){
     const bodyY=Math.min(openY,closeY),bodyH=Math.max(1,Math.abs(closeY-openY));
 
     // Footprint levels
-    if(inds.fp&&c.levels?.length&&bw>8){
+    if(inds.fp&&c.levels?.length&&bw>8&&Math.abs(highY-lowY)>=14){
       const hw=Math.floor(bw/2)-1;
       const cH=Math.abs(highY-lowY);
-      // Limit to max 20 levels for readability - merge nearby levels
+      // Limit levels to whatever actually fits in this candle's pixel height - no hard floor,
+      // otherwise a very short candle (extreme zoom, or a flat/quiet period) forces rows to
+      // render at their 14px minimum anyway and overflow way past the candle's own body.
       let rawLevels=[...c.levels].sort((a,b)=>b.price-a.price);
-      const MAX_LEVELS=Math.min(20,Math.max(5,Math.floor(cH/14)));
+      const MAX_LEVELS=Math.max(1,Math.min(20,Math.floor(cH/14)));
       if(rawLevels.length>MAX_LEVELS){
         // Merge levels into groups
         const grouped=[];
