@@ -366,6 +366,10 @@ function drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi){
     g.addColorStop(1,'rgba(20,40,90,'+(0.6*intensity).toFixed(2)+')');
     ctx.fillStyle=g;ctx.fillRect(P.l,P.t,pw,topBandBot-P.t);
   }
+  if(!window._dom1hLogged||Date.now()-window._dom1hLogged>5000){
+    window._dom1hLogged=Date.now();
+    console.log('[DOM1H DEBUG]',{P_t:P.t,ph,topBandBot,botBandTop,tradedLo,tradedHi,minP,maxP,intensity,tT,pw});
+  }
   if(botBandTop<chartBot-2){
     const g2=ctx.createLinearGradient(0,botBandTop,0,chartBot);
     g2.addColorStop(0,'rgba(20,40,90,'+(0.6*intensity).toFixed(2)+')');
@@ -838,7 +842,7 @@ function draw(){
   // Drawn last, deliberately - whale bubbles, delta boxes, and other overlays are computed with
   // enough vertical reach to spill into the reserved top/bottom margin (which is otherwise empty
   // space by design), and would otherwise paint directly over the heatmap and mostly hide it.
-  if(inds.dom1h){try{drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi);}catch(e){}}
+  if(inds.dom1h){try{drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi);}catch(e){console.error('[DOM1H ERROR]',e);}}
 }
 
 // ── Time axis ─────────────────────────────────────────
