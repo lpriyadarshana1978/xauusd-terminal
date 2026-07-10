@@ -595,7 +595,6 @@ function draw(){
   const pools=inds.liq?detectLiq(vc):[];
 
   if(inds.domliq){try{drawDomLiqHeatmap(ctx,vc,vn,pw,ph,P,py,bw,minP,maxP);}catch(e){}}
-  if(inds.dom1h){try{drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi);}catch(e){}}
 
   // Grid
   ctx.strokeStyle=_t.gridLine;ctx.lineWidth=0.5;
@@ -828,6 +827,10 @@ function draw(){
       }
     });
   }
+  // Drawn last, deliberately - whale bubbles, delta boxes, and other overlays are computed with
+  // enough vertical reach to spill into the reserved top/bottom margin (which is otherwise empty
+  // space by design), and would otherwise paint directly over the heatmap and mostly hide it.
+  if(inds.dom1h){try{drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi);}catch(e){}}
 }
 
 // ── Time axis ─────────────────────────────────────────
