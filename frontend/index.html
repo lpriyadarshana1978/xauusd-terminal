@@ -104,7 +104,7 @@ body{display:flex;flex-direction:column;font-family:'Courier New',monospace;font
     </div>
   </div>
   <div class="right-col">
-    <div class="ph">DOM</div>
+    <div class="ph" id="domHeader">DOM</div>
     <div id="domList" style="flex:1;overflow:hidden;"></div>
     <div id="domBid" style="padding:3px 6px;background:#0a1a0a;font-size:10px;color:#00e676;text-align:center;border-top:1px solid #1e2e1e;font-weight:bold;flex-shrink:0;">BID ——</div>
     <div id="domAsk" style="padding:3px 6px;background:#1a0a0a;font-size:10px;color:#f44336;text-align:center;border-top:1px solid #2e1e1e;font-weight:bold;flex-shrink:0;">ASK ——</div>
@@ -228,6 +228,10 @@ function sanitizeBar(b){
 
 // ── State ────────────────────────────────────────────
 let candles={},cvdHist={},domData=[],whaleAlerts=[];
+let realDepthTime=0; // timestamp of the last real Level 2 depth message for currentSym - if this
+                      // goes stale (broker doesn't support it, or we haven't heard back yet),
+                      // we fall back to the synthetic DOM ladder instead of freezing/going blank.
+const REAL_DEPTH_STALE_MS=4000;
 let cvd=0,vwapV=0,tick=0,openPrice=0;
 let currentSym='XAUUSDm',currentTF='15m';
 let mtfData={},mtfMode='bias';
@@ -470,7 +474,7 @@ function handleMsg(msg){
     $('pc').textContent=(chg>=0?'+':'')+chg.toFixed(symDecimals())+' ('+(chg>=0?'+':'')+pct+'%)';
     $('pc').className='pchg '+(chg>=0?'pos':'neg');
     set('sv-spread',msg.spread,'#aaa');
-    genDOMDemo(p);
+    if(Date.now()-realDepthTime>REAL_DEPTH_STALE_MS)genDOMDemo(p); // only fake it if real L2 depth isn't flowing
     if(inds.domliq)updateDomLiq(p);
     const cs=candles[currentTF];
     if(cs?.length){
@@ -484,6 +488,18 @@ function handleMsg(msg){
     }
     TFS.forEach(tf=>{if(mtfData[tf]){const d=mtfData[tf];['bias','delta','mom'].forEach(k=>{d[k]=Math.max(-1,Math.min(1,d[k]+rnd(-0.05,0.05)));});}});
     if(Math.random()<0.03){whaleAlerts.unshift({side:Math.random()>0.5?'BUY':'SELL',vol:rint(2000,5000),price:p});if(whaleAlerts.length>8)whaleAlerts.pop();}
+  }
+  if(msg.type==='depth'&&msg.symbol===currentSym){
+    // Real MT5 Level 2 order book, when the broker actually provides it. Falls back to the
+    // synthetic ladder automatically (see the tick handler above) if this stops arriving.
+    const bids=(msg.bids||[]).slice().sort((a,b)=>b.price-a.price);
+    const asks=(msg.asks||[]).slice().sort((a,b)=>a.price-b.price);
+    if(bids.length||asks.length){
+      realDepthTime=Date.now();
+      domData=[];
+      asks.slice().reverse().forEach((a,i)=>domData.push({price:a.price,vol:Math.round(a.volume||a.vol||0),side:'ask',best:i===asks.length-1}));
+      bids.forEach((b,i)=>domData.push({price:b.price,vol:Math.round(b.volume||b.vol||0),side:'bid',best:i===0}));
+    }
   }
   if(msg.type==='history'&&msg.symbol===currentSym&&msg.tf===currentTF){
     demoMode=false;
@@ -936,6 +952,12 @@ function drawStats(){
 // ── DOM panel ─────────────────────────────────────────
 function renderDOM(){
   const list=$('domList');if(!list||!domData.length)return;
+  const domHdr=$('domHeader');
+  if(domHdr){
+    const isReal=Date.now()-realDepthTime<=REAL_DEPTH_STALE_MS;
+    if(isReal){domHdr.textContent='DOM (Real L2)';domHdr.style.color='#00e676';}
+    else{domHdr.textContent='DOM (Sim)';domHdr.style.color='#888';}
+  }
   const maxV=Math.max(...domData.map(d=>d.vol));
   let h='';
   domData.forEach(d=>{const pct=d.vol/maxV,isA=d.side==='ask',col=isA?'#f44336':'#00e676';
@@ -1010,7 +1032,7 @@ window.changeSym=function(sym){
   if(sym===currentSym)return;
   currentSym=sym;
   // wipe all per-symbol state so the old symbol's candles/levels never bleed into the new chart
-  candles={};cvdHist={};cvd=0;whaleAlerts=[];domLiqSnaps={};mtfData={};domData=[];dom1hBars=[];
+  candles={};cvdHist={};cvd=0;whaleAlerts=[];domLiqSnaps={};mtfData={};domData=[];dom1hBars=[];realDepthTime=0;
   viewOffset=0;yOffset=0;openPrice=0;
   set('lp','——');
   const pcEl=$('pc');if(pcEl){pcEl.textContent='connecting...';pcEl.className='pchg';pcEl.style.color='#555';}
