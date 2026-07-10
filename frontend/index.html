@@ -576,7 +576,16 @@ function draw(){
   const range=maxP-minP||1;
   minP-=range*0.01+yOffset*range*0.05;
   maxP+=range*0.13-yOffset*range*0.05;
-  if(inds.dom1h){minP-=range*0.08;maxP+=range*0.06;} // reserve top/bottom bands for it, modestly
+  if(inds.dom1h){
+    // A percentage-of-range margin shrinks to near-nothing in actual screen pixels on a wide
+    // (volatile) trading range. Solve backward from a target pixel height instead, so the bands
+    // stay a consistent, visible size on both quiet and wide-range days.
+    const prBase=maxP-minP||1;
+    const pxPerUnit=ph/prBase;
+    const targetPx=55;
+    const extraPrice=targetPx/pxPerUnit;
+    minP-=extraPrice;maxP+=extraPrice;
+  }
   const pr=maxP-minP;
   const py=p=>P.t+ph*(1-(p-minP)/pr);
 
