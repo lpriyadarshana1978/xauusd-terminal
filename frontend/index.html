@@ -352,7 +352,13 @@ function drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi){
   // 1-hour volume: more real data means a bolder, more opaque band; almost none yet (e.g. right
   // after restarting the bridge) fades it down instead of showing a fully-saturated fake reading.
   const intensity=Math.max(0.65,Math.min(1,tT/3000));
-  const topBandBot=py(tradedHi),botBandTop=py(tradedLo);
+  const MIN_BAND=40;
+  const chartBot=P.t+ph;
+  let topBandBot=py(tradedHi),botBandTop=py(tradedLo);
+  // Safety floor: whatever the upstream margin math produces, never let the band collapse
+  // below a minimum visible height.
+  if(topBandBot-P.t<MIN_BAND)topBandBot=P.t+MIN_BAND;
+  if(chartBot-botBandTop<MIN_BAND)botBandTop=chartBot-MIN_BAND;
   if(topBandBot>P.t+2){
     const g=ctx.createLinearGradient(0,P.t,0,topBandBot);
     g.addColorStop(0,'rgba(255,221,0,'+(0.8*intensity).toFixed(2)+')');
@@ -360,7 +366,6 @@ function drawDom1h(ctx,cw,P,py,pw,ph,minP,maxP,tradedLo,tradedHi){
     g.addColorStop(1,'rgba(20,40,90,'+(0.6*intensity).toFixed(2)+')');
     ctx.fillStyle=g;ctx.fillRect(P.l,P.t,pw,topBandBot-P.t);
   }
-  const chartBot=P.t+ph;
   if(botBandTop<chartBot-2){
     const g2=ctx.createLinearGradient(0,botBandTop,0,chartBot);
     g2.addColorStop(0,'rgba(20,40,90,'+(0.6*intensity).toFixed(2)+')');
@@ -577,14 +582,17 @@ function draw(){
   minP-=range*0.01+yOffset*range*0.05;
   maxP+=range*0.13-yOffset*range*0.05;
   if(inds.dom1h){
-    // A percentage-of-range margin shrinks to near-nothing in actual screen pixels on a wide
-    // (volatile) trading range. Solve backward from a target pixel height instead, so the bands
-    // stay a consistent, visible size on both quiet and wide-range days.
-    const prBase=maxP-minP||1;
-    const pxPerUnit=ph/prBase;
-    const targetPx=55;
-    const extraPrice=targetPx/pxPerUnit;
-    minP-=extraPrice;maxP+=extraPrice;
+    // Directly guarantee a fixed pixel reservation on each side, rather than solving backward
+    // for an "extra" price amount - compress the candles' own plotted range into a smaller
+    // usable height so exactly BAND_PX pixels are left over top and bottom, regardless of how
+    // wide or narrow the actual price range is.
+    const BAND_PX=Math.max(45,Math.floor(ph*0.15));
+    const usablePh=Math.max(60,ph-2*BAND_PX);
+    const scaleFactor=ph/usablePh;
+    const curPr=maxP-minP||1;
+    const newPr=curPr*scaleFactor;
+    const extra=(newPr-curPr)/2;
+    minP-=extra;maxP+=extra;
   }
   const pr=maxP-minP;
   const py=p=>P.t+ph*(1-(p-minP)/pr);
